@@ -1,0 +1,72 @@
+# Flovyn Server - Self-Hosted Configuration
+# Single org, pre-configured for on-premises deployment
+
+database_url = "postgres://flovyn:flovyn@localhost:5435/flovyn"
+server_port = 8000
+grpc_server_port = 9090
+
+# NATS Messaging
+[nats]
+enabled = true
+url = "nats://localhost:4222"
+
+# OpenTelemetry
+[otel]
+enabled = true
+otlp_endpoint = "http://localhost:4317"
+service_name = "flovyn-server"
+
+# Metrics
+[metrics]
+enabled = true
+port = 9093
+
+# Pre-configured org (slug MUST match organization slug in Flovyn App)
+[[orgs]]
+id = "550e8400-e29b-41d4-a716-446655440000"
+name = "Development"
+slug = "dev"
+tier = "FREE"
+
+# Authentication
+[auth]
+enabled = true
+
+# Static API Keys for development
+[auth.static_api_key]
+keys = [
+    { key = "flovyn_sk_dev_admin", org_id = "550e8400-e29b-41d4-a716-446655440000", principal_type = "User", principal_id = "admin", role = "OWNER" },
+    { key = "fwt_dev_worker", org_id = "550e8400-e29b-41d4-a716-446655440000", principal_type = "Worker", principal_id = "worker:dev" },
+]
+
+# JWT (skip verification for dev)
+[auth.jwt]
+skip_verification = true
+
+# Better Auth (API keys and JWTs from flovyn-app)
+[auth.better_auth]
+validation_url = "http://localhost:3000/api/auth/validate-key"
+timeout_secs = 5
+
+[auth.better_auth.jwt]
+jwks_uri = "http://localhost:3000/.well-known/jwks.json"
+skip_verification = false
+
+# Worker tokens
+[auth.worker_token]
+prefix = "fwt_"
+
+# Attribute resolver
+[auth.attr_resolver]
+resolver_type = "noop"
+
+# HTTP endpoints
+[auth.endpoints.http]
+authenticators = ["static_api_key", "better_auth_jwt", "better_auth_api_key"]
+authorizer = "cedar"
+exclude_paths = ["/_/health", "/api/docs", "/api/docs/openapi.json"]
+
+# gRPC endpoints
+[auth.endpoints.grpc]
+authenticators = ["static_api_key", "better_auth_jwt", "better_auth_api_key"]
+authorizer = "cedar"

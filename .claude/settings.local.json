@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(cargo check:*)",
+      "Bash(grep:*)",
+      "Bash(docker exec:*)",
+      "Bash(curl:*)",
+      "Bash(cat:*)",
+      "Bash(cargo test:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill:*)"
+    ]
+  }
+}
