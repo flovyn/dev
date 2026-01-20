@@ -1,0 +1,91 @@
+# Flovyn Full Stack Development Environment
+# Usage: mise run <task>
+
+[tasks.start]
+description = "Start infrastructure services"
+run = "./dev.sh start {{arg(name='scenario', default='self-hosted')}}"
+
+[tasks.stop]
+description = "Stop infrastructure services"
+run = "./dev.sh stop"
+
+[tasks.server]
+description = "Start flovyn-server (run setup-self-hosted or setup-saas first)"
+run = """
+if ! docker ps --format '{% raw %}{{.Names}}{% endraw %}' | grep -q flovyn-postgres-server; then
+  echo "Error: Infrastructure not running. Run 'mise run setup-self-hosted' or 'mise run setup-saas' first."
+  exit 1
+fi
+./dev.sh server {{arg(name='scenario', default='self-hosted')}}
+"""
+
+[tasks.app]
+description = "Start flovyn-app (run setup-self-hosted or setup-saas first)"
+run = """
+if ! docker ps --format '{% raw %}{{.Names}}{% endraw %}' | grep -q flovyn-postgres-app; then
+  echo "Error: Infrastructure not running. Run 'mise run setup-self-hosted' or 'mise run setup-saas' first."
+  exit 1
+fi
+./dev.sh app
+"""
+
+[tasks.status]
+description = "Show service status"
+run = "./dev.sh status"
+
+[tasks.logs]
+description = "Show logs (optionally for a specific service)"
+run = "./dev.sh logs {{arg(name='service', default='')}}"
+
+[tasks.migrate]
+description = "Run all database migrations"
+run = "./dev.sh migrate"
+
+[tasks.clean]
+description = "Remove all containers and data"
+run = "./dev.sh clean"
+
+[tasks.setup-self-hosted]
+description = "Full setup for self-hosted development"
+depends = ["start", "migrate"]
+run = """
+echo ""
+echo "Setup complete! Run 'mise run server' and 'mise run app' in separate terminals."
+"""
+
+[tasks.setup-saas]
+description = "Full setup for SaaS development"
+run = """
+./dev.sh start saas
+./dev.sh migrate
+echo ""
+echo "Setup complete! Run 'mise run server saas' and 'mise run app' in separate terminals."
+"""
+
+[tasks.db-server]
+description = "Connect to server database (interactive)"
+run = "docker exec -it flovyn-postgres-server psql -U flovyn -d flovyn"
+
+[tasks.db-app]
+description = "Connect to app database (interactive)"
+run = "docker exec -it flovyn-postgres-app psql -U flovyn-app -d flovyn-app"
+
+[tasks.query-server]
+description = "Query server database"
+run = "docker exec flovyn-postgres-server psql -U flovyn -d flovyn -c \"{{arg(name='sql')}}\""
+
+[tasks.query-app]
+description = "Query app database"
+run = "docker exec flovyn-postgres-app psql -U flovyn-app -d flovyn-app -c \"{{arg(name='sql')}}\""
+
+[tasks.jaeger]
+description = "Open Jaeger UI"
+run = "open http://localhost:16686"
+
+[tasks.open-app]
+description = "Open Flovyn App"
+run = "open http://localhost:3000"
+
+[tasks.open-docs]
+description = "Open API docs"
+run = "open http://localhost:8000/api/docs"

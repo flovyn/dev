@@ -4,14 +4,14 @@
 
 ```bash
 # Self-hosted mode (single org)
-just setup-self-hosted    # Start infra + migrate
-just server               # Terminal 1
-just app                  # Terminal 2
+mise run setup-self-hosted    # Start infra + migrate
+mise run server               # Terminal 1
+mise run app                  # Terminal 2
 
 # SaaS mode (multi-org)
-just setup-saas           # Start infra + migrate
-just server saas          # Terminal 1
-just app                  # Terminal 2
+mise run setup-saas           # Start infra + migrate
+mise run server saas          # Terminal 1
+mise run app                  # Terminal 2
 ```
 
 ## Services
@@ -26,10 +26,10 @@ just app                  # Terminal 2
 ## Commands
 
 ```bash
-just                 # List all commands
-just status          # Show running containers
-just logs            # View logs
-just clean           # Remove all data
-just db-server       # Connect to server database
-just db-app          # Connect to app database
+mise tasks               # List all commands
+mise run status          # Show running containers
+mise run logs            # View logs
+mise run clean           # Remove all data
+mise run db-server       # Connect to server database
+mise run db-app          # Connect to app database
 ```

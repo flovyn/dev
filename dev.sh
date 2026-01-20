@@ -144,7 +144,7 @@ start_app() {
     echo -e "  App URL:  http://localhost:3000"
     echo ""
 
-    pnpm dev --filter web
+    pnpm --filter web dev
 }
 
 migrate_all() {

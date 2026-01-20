@@ -10,37 +10,37 @@ This is the Flovyn full-stack development environment that orchestrates infrastr
 
 ## Commands
 
-All commands use [Just](https://github.com/casey/just) as a task runner:
+All commands use [Mise](https://mise.jdx.dev/) as a task runner:
 
 ```bash
 # Full setup (pick one scenario)
-just setup-self-hosted    # Single org mode
-just setup-saas           # Multi-org mode
+mise run setup-self-hosted    # Single org mode
+mise run setup-saas           # Multi-org mode
 
 # Run services (in separate terminals after setup)
-just server               # Start flovyn-server (self-hosted)
-just server saas          # Start flovyn-server (saas)
-just app                  # Start flovyn-app
+mise run server               # Start flovyn-server (self-hosted)
+mise run server saas          # Start flovyn-server (saas)
+mise run app                  # Start flovyn-app
 
 # Infrastructure
-just start                # Start Docker containers only
-just stop                 # Stop all containers
-just status               # Show container status
-just logs                 # View all logs
-just logs <service>       # View specific service logs
-just clean                # Remove containers and data
+mise run start                # Start Docker containers only
+mise run stop                 # Stop all containers
+mise run status               # Show container status
+mise run logs                 # View all logs
+mise run logs <service>       # View specific service logs
+mise run clean                # Remove containers and data
 
 # Database
-just migrate              # Run all migrations
-just db-server            # Connect to server database (psql)
-just db-app               # Connect to app database (psql)
-just query-server "SQL"   # Run SQL on server database
-just query-app "SQL"      # Run SQL on app database
+mise run migrate              # Run all migrations
+mise run db-server            # Connect to server database (psql)
+mise run db-app               # Connect to app database (psql)
+mise run query-server "SQL"   # Run SQL on server database
+mise run query-app "SQL"      # Run SQL on app database
 
 # Open in browser
-just jaeger               # Open Jaeger UI
-just open-app             # Open Flovyn App
-just open-docs            # Open API docs
+mise run jaeger               # Open Jaeger UI
+mise run open-app             # Open Flovyn App
+mise run open-docs            # Open API docs
 ```
 
 ## Architecture
