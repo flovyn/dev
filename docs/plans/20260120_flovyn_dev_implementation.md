@@ -306,52 +306,78 @@ Basic worktree management with port isolation from new location.
 
 **Goal:** Auto-create design docs when creating worktrees, manage doc lifecycle.
 
+**Status:** ✅ Complete
+
 ### TODO
 
-- [ ] **2.1** Auto-create design doc on `create`
-  - [ ] Copy template from `dev/docs/process/templates/design.md`
-  - [ ] Generate filename: `YYYYMMDD_{feature}.md`
-  - [ ] Replace placeholders: `{Feature Name}`, `{feature}`, `YYYY-MM-DD`
-  - [ ] Place in `dev/docs/design/`
+- [x] **2.1** Auto-create design doc on `create`
+  - [x] Copy template from `dev/docs/templates/design.md`
+  - [x] Generate filename: `YYYYMMDD_{feature}.md` (standard) or `features/{feature}/design.md` (large)
+  - [x] Replace placeholders: `{Feature Title}`, `{feature}`, `{DATE}`
+  - [x] Place in `dev/docs/design/` or `dev/docs/features/{feature}/`
 
-- [ ] **2.2** Implement `flovyn-dev open <feature>`
-  - [ ] Find design doc for feature
-  - [ ] Open in `$EDITOR` (default: vim)
-  - [ ] Support `--plan` flag to open plan doc instead
+- [x] **2.2** Add `--large` flag to `create`
+  - [x] Creates subdirectory structure: `dev/docs/features/{feature}/`
+  - [x] Design doc placed at `features/{feature}/design.md`
+  - [x] Supports multiple plan files for phases
 
-- [ ] **2.3** Implement `flovyn-dev docs <feature>`
-  - [ ] Search all doc directories for files matching feature
-  - [ ] List: type, path, last modified
-  - [ ] Example output:
-    ```
-    design  dev/docs/design/20260120_webhook_retry.md
-    plan    dev/docs/plans/20260120_webhook_retry.md
-    ```
+- [x] **2.3** Implement `flovyn-dev open <feature> [design|plan]`
+  - [x] Find design or plan doc for feature
+  - [x] Open in `$EDITOR` (default: vim)
+  - [x] Default to design doc, optional `plan` argument for plan doc
+  - [x] Interactive selection if multiple docs found
 
-- [ ] **2.4** Implement `flovyn-dev docs mv <feature> <from> <to>`
-  - [ ] Move doc between directories (e.g., research → design)
-  - [ ] Update filename if needed (keep date, update description)
-  - [ ] Update internal links in the moved doc
-  - [ ] Warn if target already exists
+- [x] **2.4** Implement `flovyn-dev docs list <feature>`
+  - [x] Search all doc directories for files matching feature
+  - [x] List design and plan docs with paths
+  - [x] Indicate if feature uses large feature structure
 
-- [ ] **2.5** Implement `flovyn-dev docs archive <feature>`
-  - [ ] Create archive folder: `dev/docs/archive/YYYYMMDD_{feature}/`
-  - [ ] Move design doc → `archive/{feature}/design.md`
-  - [ ] Move plan doc → `archive/{feature}/plan.md`
-  - [ ] Move any bug docs related to feature
+- [x] **2.5** Implement `flovyn-dev docs promote <feature>`
+  - [x] Convert standard feature to large feature structure
+  - [x] Move design doc to `features/{feature}/design.md`
+  - [x] Move plan docs to `features/{feature}/plan.md` (or `plan_N.md` if multiple)
+
+- [x] **2.6** Implement `flovyn-dev docs archive <feature>`
+  - [x] Create archive folder: `dev/docs/archive/YYYYMMDD_{feature}/`
+  - [x] Move design doc → `archive/YYYYMMDD_{feature}/design.md`
+  - [x] Move plan doc → `archive/YYYYMMDD_{feature}/plan.md`
+  - [x] Handle both standard and large feature structures
+
+### Document Structure
+
+**Standard feature (default):**
+```
+dev/docs/design/YYYYMMDD_{feature}.md
+dev/docs/plans/YYYYMMDD_{feature}.md
+```
+
+**Large feature (`--large` or after `promote`):**
+```
+dev/docs/features/{feature}/
+├── design.md
+├── plan.md (or plan_phase1.md, plan_phase2.md, etc.)
+└── ...
+```
 
 ### Test
 
 ```bash
+# Standard feature
 flovyn-dev create webhook-retry
-cat dev/docs/design/20260120_webhook_retry.md  # Should exist
-
-flovyn-dev docs webhook-retry
+flovyn-dev docs list webhook-retry
 flovyn-dev open webhook-retry
 
-flovyn-dev docs mv retry-strategies research design
+# Large feature
+flovyn-dev create auth-system --large
+flovyn-dev docs list auth-system
+
+# Promote standard to large
+flovyn-dev docs promote webhook-retry
+flovyn-dev docs list webhook-retry  # Now shows features/ path
+
+# Archive completed feature
 flovyn-dev docs archive old-feature
-ls dev/docs/archive/  # Should show old-feature/
+ls dev/docs/archive/  # Should show YYYYMMDD_old-feature/
 ```
 
 ### Usable After
@@ -640,7 +666,7 @@ Complete end-to-end workflow.
 | 0.6 | Centralized APP_URL | M0.5 | Low | ✅ Done |
 | 0.7 | Configurable Ports | M0.6 | Low | ✅ Done |
 | 1 | CLI + Worktrees + Port Allocation | M0 | Low | ✅ Done |
-| 2 | Doc templates + lifecycle | M1 | Low | |
+| 2 | Doc templates + lifecycle | M1 | Low | ✅ Done |
 | 3 | Tmux + Claude | M1, M2 | Medium | |
 | 4 | GitHub Projects | M1, M2, M3 | Medium | |
 | ~~5~~ | ~~Docker per-worktree~~ → Port allocation | M1 | Low | ✅ Integrated into M1 |

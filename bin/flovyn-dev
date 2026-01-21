@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -52,6 +53,14 @@ BASE_PORTS = {
 UNTRACKED_FILES = [
     # "sdk-rust/examples/.env",  # Add files here if needed
 ]
+
+# Documentation directories (relative to dev/)
+DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
+TEMPLATES_DIR = DOCS_DIR / "templates"
+DESIGN_DIR = DOCS_DIR / "design"
+PLANS_DIR = DOCS_DIR / "plans"
+FEATURES_DIR = DOCS_DIR / "features"  # For large features
+ARCHIVE_DIR = DOCS_DIR / "archive"
 
 # Colors for terminal output
 class Colors:
@@ -232,18 +241,142 @@ def list_all_worktrees() -> list[str]:
 
 
 # =============================================================================
+# Documentation Helpers
+# =============================================================================
+
+def feature_to_title(feature: str) -> str:
+    """Convert feature slug to title case."""
+    return feature.replace("-", " ").replace("_", " ").title()
+
+
+def get_date_prefix() -> str:
+    """Get today's date as YYYYMMDD prefix."""
+    return date.today().strftime("%Y%m%d")
+
+
+def is_large_feature(feature: str) -> bool:
+    """Check if feature uses large feature structure (subdirectory)."""
+    return (FEATURES_DIR / feature).exists()
+
+
+def find_feature_docs(feature: str) -> dict[str, list[Path]]:
+    """Find all docs for a feature. Returns dict with 'design', 'plan' keys."""
+    docs = {"design": [], "plan": []}
+
+    # Check large feature structure first
+    feature_dir = FEATURES_DIR / feature
+    if feature_dir.exists():
+        for f in feature_dir.iterdir():
+            if f.suffix == ".md":
+                if f.stem == "design" or f.stem.startswith("design"):
+                    docs["design"].append(f)
+                elif f.stem == "plan" or f.stem.startswith("plan"):
+                    docs["plan"].append(f)
+        return docs
+
+    # Normalize feature name for matching (handle both dashes and underscores)
+    feature_normalized = feature.replace("-", "_")
+
+    # Check standard structure (files with feature name)
+    # Pattern: YYYYMMDD_{feature}.md or {feature}.md
+    if DESIGN_DIR.exists():
+        for f in DESIGN_DIR.iterdir():
+            if f.suffix == ".md":
+                stem_normalized = f.stem.replace("-", "_")
+                if feature_normalized in stem_normalized:
+                    docs["design"].append(f)
+
+    if PLANS_DIR.exists():
+        for f in PLANS_DIR.iterdir():
+            if f.suffix == ".md":
+                stem_normalized = f.stem.replace("-", "_")
+                if feature_normalized in stem_normalized:
+                    docs["plan"].append(f)
+
+    return docs
+
+
+def create_design_doc(feature: str, large: bool = False) -> Optional[Path]:
+    """Create design doc from template. Returns path to created doc."""
+    template_path = TEMPLATES_DIR / "design.md"
+    if not template_path.exists():
+        return None
+
+    template = template_path.read_text()
+
+    # Replace placeholders
+    title = feature_to_title(feature)
+    date_str = date.today().strftime("%Y-%m-%d")
+    date_prefix = get_date_prefix()
+
+    content = template.replace("{Feature Title}", title)
+    content = content.replace("{DATE}", date_str)
+    content = content.replace("{feature}", feature)
+
+    if large:
+        # Large feature: create subdirectory
+        feature_dir = FEATURES_DIR / feature
+        feature_dir.mkdir(parents=True, exist_ok=True)
+        doc_path = feature_dir / "design.md"
+    else:
+        # Standard feature: single file with date prefix
+        doc_path = DESIGN_DIR / f"{date_prefix}_{feature.replace('-', '_')}.md"
+
+    doc_path.write_text(content)
+    return doc_path
+
+
+def create_plan_doc(feature: str, large: bool = False, phase: Optional[str] = None) -> Optional[Path]:
+    """Create plan doc from template. Returns path to created doc."""
+    template_path = TEMPLATES_DIR / "plan.md"
+    if not template_path.exists():
+        return None
+
+    template = template_path.read_text()
+
+    # Replace placeholders
+    title = feature_to_title(feature)
+    date_str = date.today().strftime("%Y-%m-%d")
+    date_prefix = get_date_prefix()
+    design_file = f"{date_prefix}_{feature.replace('-', '_')}.md"
+
+    content = template.replace("{Feature Title}", title)
+    content = content.replace("{DATE}", date_str)
+    content = content.replace("{DESIGN_FILE}", design_file if not large else "../design.md")
+    content = content.replace("{Phase Name}", phase or "Initial")
+
+    if large:
+        # Large feature: create in subdirectory
+        feature_dir = FEATURES_DIR / feature
+        feature_dir.mkdir(parents=True, exist_ok=True)
+        if phase:
+            doc_path = feature_dir / f"plan_{phase.lower().replace(' ', '_')}.md"
+        else:
+            doc_path = feature_dir / "plan.md"
+    else:
+        # Standard feature: single file with date prefix
+        doc_path = PLANS_DIR / f"{date_prefix}_{feature.replace('-', '_')}.md"
+
+    doc_path.write_text(content)
+    return doc_path
+
+
+# =============================================================================
 # Commands
 # =============================================================================
 
 def cmd_create(args: argparse.Namespace) -> int:
     """Create worktrees for a feature."""
     feature = args.feature
+    large = getattr(args, 'large', False)
 
     if worktree_exists(feature):
         print(colored(f"Error: Worktree '{feature}' already exists", Colors.RED))
         return 1
 
     print(colored(f"Creating worktree: {feature}", Colors.BLUE))
+    if large:
+        print(colored("  (large feature - using subdirectory structure)", Colors.YELLOW))
 
     # Allocate ports
     print(colored("  Allocating ports...", Colors.YELLOW))
@@ -296,6 +429,14 @@ def cmd_create(args: argparse.Namespace) -> int:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
             print(colored("✓", Colors.GREEN))
+
+    # Create design doc
+    print(f"  Creating design doc...", end=" ")
+    design_path = create_design_doc(feature, large=large)
+    if design_path:
+        print(colored(f"✓ ({design_path.relative_to(DOCS_DIR)})", Colors.GREEN))
+    else:
+        print(colored("✗ (template not found)", Colors.YELLOW))
 
     print()
     print(colored(f"Worktree '{feature}' created successfully!", Colors.GREEN))
@@ -546,6 +687,178 @@ def cmd_env(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_open(args: argparse.Namespace) -> int:
+    """Open design or plan doc for a feature."""
+    feature = args.feature
+    doc_type = args.type  # 'design' or 'plan'
+
+    docs = find_feature_docs(feature)
+
+    if not docs["design"] and not docs["plan"]:
+        print(colored(f"Error: No docs found for '{feature}'", Colors.RED))
+        return 1
+
+    target_docs = docs[doc_type]
+
+    if not target_docs:
+        # Try the other type if requested type not found
+        other_type = "plan" if doc_type == "design" else "design"
+        if docs[other_type]:
+            print(colored(f"No {doc_type} doc found, but found {other_type} doc(s).", Colors.YELLOW))
+            target_docs = docs[other_type]
+        else:
+            print(colored(f"Error: No {doc_type} doc found for '{feature}'", Colors.RED))
+            return 1
+
+    # If multiple docs, let user choose
+    if len(target_docs) > 1:
+        print(colored(f"Multiple {doc_type} docs found:", Colors.BLUE))
+        for i, doc in enumerate(target_docs, 1):
+            print(f"  {i}. {doc.name}")
+        try:
+            choice = int(input("Select (number): ").strip()) - 1
+            if 0 <= choice < len(target_docs):
+                doc_path = target_docs[choice]
+            else:
+                print(colored("Invalid selection.", Colors.RED))
+                return 1
+        except (ValueError, EOFError):
+            print(colored("Invalid selection.", Colors.RED))
+            return 1
+    else:
+        doc_path = target_docs[0]
+
+    # Open in editor
+    editor = os.environ.get("EDITOR", "vim")
+    print(f"Opening {doc_path.relative_to(DOCS_DIR)} in {editor}...")
+    os.execvp(editor, [editor, str(doc_path)])
+    return 0
+
+
+def cmd_docs(args: argparse.Namespace) -> int:
+    """List docs for a feature."""
+    feature = args.feature
+
+    docs = find_feature_docs(feature)
+
+    if not docs["design"] and not docs["plan"]:
+        print(colored(f"No docs found for '{feature}'", Colors.YELLOW))
+        return 0
+
+    print(colored(f"Docs for: {feature}", Colors.BLUE))
+
+    if is_large_feature(feature):
+        print(colored("  (large feature - subdirectory structure)", Colors.YELLOW))
+
+    print()
+
+    if docs["design"]:
+        print(colored("Design:", Colors.CYAN))
+        for doc in docs["design"]:
+            print(f"  {doc.relative_to(DOCS_DIR)}")
+
+    if docs["plan"]:
+        print(colored("Plan:", Colors.CYAN))
+        for doc in docs["plan"]:
+            print(f"  {doc.relative_to(DOCS_DIR)}")
+
+    return 0
+
+
+def cmd_docs_promote(args: argparse.Namespace) -> int:
+    """Promote a feature to large feature structure."""
+    feature = args.feature
+
+    if is_large_feature(feature):
+        print(colored(f"Feature '{feature}' is already a large feature.", Colors.YELLOW))
+        return 0
+
+    docs = find_feature_docs(feature)
+
+    if not docs["design"] and not docs["plan"]:
+        print(colored(f"Error: No docs found for '{feature}'", Colors.RED))
+        return 1
+
+    print(colored(f"Promoting '{feature}' to large feature structure...", Colors.BLUE))
+
+    # Create feature directory
+    feature_dir = FEATURES_DIR / feature
+    feature_dir.mkdir(parents=True, exist_ok=True)
+
+    # Move design docs
+    for doc in docs["design"]:
+        new_path = feature_dir / "design.md"
+        print(f"  Moving {doc.name} -> features/{feature}/design.md...", end=" ")
+        shutil.move(str(doc), str(new_path))
+        print(colored("✓", Colors.GREEN))
+
+    # Move plan docs
+    for i, doc in enumerate(docs["plan"]):
+        if len(docs["plan"]) == 1:
+            new_name = "plan.md"
+        else:
+            new_name = f"plan_{i + 1}.md"
+        new_path = feature_dir / new_name
+        print(f"  Moving {doc.name} -> features/{feature}/{new_name}...", end=" ")
+        shutil.move(str(doc), str(new_path))
+        print(colored("✓", Colors.GREEN))
+
+    print()
+    print(colored(f"Feature '{feature}' promoted to large feature structure.", Colors.GREEN))
+    print(f"  Location: {feature_dir.relative_to(DOCS_DIR)}/")
+    return 0
+
+
+def cmd_docs_archive(args: argparse.Namespace) -> int:
+    """Archive docs for a completed feature."""
+    feature = args.feature
+
+    docs = find_feature_docs(feature)
+
+    if not docs["design"] and not docs["plan"]:
+        print(colored(f"Error: No docs found for '{feature}'", Colors.RED))
+        return 1
+
+    # Create archive directory
+    date_prefix = get_date_prefix()
+    archive_dir = ARCHIVE_DIR / f"{date_prefix}_{feature}"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    print(colored(f"Archiving docs for '{feature}'...", Colors.BLUE))
+
+    # Archive from large feature structure
+    if is_large_feature(feature):
+        feature_dir = FEATURES_DIR / feature
+        for doc in feature_dir.iterdir():
+            if doc.suffix == ".md":
+                new_path = archive_dir / doc.name
+                print(f"  Moving {doc.name}...", end=" ")
+                shutil.move(str(doc), str(new_path))
+                print(colored("✓", Colors.GREEN))
+        # Remove empty feature directory
+        try:
+            feature_dir.rmdir()
+        except OSError:
+            pass
+    else:
+        # Archive from standard structure
+        for doc in docs["design"]:
+            new_path = archive_dir / "design.md"
+            print(f"  Moving {doc.name} -> design.md...", end=" ")
+            shutil.move(str(doc), str(new_path))
+            print(colored("✓", Colors.GREEN))
+
+        for doc in docs["plan"]:
+            new_path = archive_dir / "plan.md"
+            print(f"  Moving {doc.name} -> plan.md...", end=" ")
+            shutil.move(str(doc), str(new_path))
+            print(colored("✓", Colors.GREEN))
+
+    print()
+    print(colored(f"Docs archived to: {archive_dir.relative_to(DOCS_DIR)}/", Colors.GREEN))
+    return 0
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -556,12 +869,18 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  flovyn-dev create webhook-retry   Create worktrees for a new feature
-  flovyn-dev list                   List all worktrees
-  flovyn-dev status webhook-retry   Show git status
+  flovyn-dev create webhook-retry        Create worktrees for a new feature
+  flovyn-dev create auth-system --large  Create large feature with subdirectory
+  flovyn-dev list                        List all worktrees
+  flovyn-dev status webhook-retry        Show git status
   flovyn-dev commit webhook-retry -m "feat: add retry"
-  flovyn-dev env webhook-retry      Show allocated ports
-  flovyn-dev delete webhook-retry   Delete worktrees
+  flovyn-dev env webhook-retry           Show allocated ports
+  flovyn-dev open webhook-retry          Open design doc in $EDITOR
+  flovyn-dev open webhook-retry plan     Open plan doc
+  flovyn-dev docs list webhook-retry     List all docs for feature
+  flovyn-dev docs promote webhook-retry  Convert to large feature structure
+  flovyn-dev docs archive webhook-retry  Archive completed feature docs
+  flovyn-dev delete webhook-retry        Delete worktrees
         """,
     )
 
@@ -570,6 +889,7 @@ Examples:
     # create
     p_create = subparsers.add_parser("create", help="Create worktrees for a feature")
     p_create.add_argument("feature", help="Feature name (used as branch name)")
+    p_create.add_argument("--large", action="store_true", help="Use large feature structure (subdirectory for docs)")
     p_create.set_defaults(func=cmd_create)
 
     # delete
@@ -599,6 +919,31 @@ Examples:
     p_env = subparsers.add_parser("env", help="Show allocated ports for a feature")
     p_env.add_argument("feature", help="Feature name")
     p_env.set_defaults(func=cmd_env)
+
+    # open
+    p_open = subparsers.add_parser("open", help="Open design or plan doc in $EDITOR")
+    p_open.add_argument("feature", help="Feature name")
+    p_open.add_argument("type", nargs="?", default="design", choices=["design", "plan"], help="Doc type (default: design)")
+    p_open.set_defaults(func=cmd_open)
+
+    # docs (with subcommands)
+    p_docs = subparsers.add_parser("docs", help="Manage feature documentation")
+    docs_subparsers = p_docs.add_subparsers(dest="docs_command", required=True)
+
+    # docs list <feature>
+    p_docs_list = docs_subparsers.add_parser("list", help="List docs for a feature")
+    p_docs_list.add_argument("feature", help="Feature name")
+    p_docs_list.set_defaults(func=cmd_docs)
+
+    # docs promote <feature>
+    p_docs_promote = docs_subparsers.add_parser("promote", help="Promote to large feature structure")
+    p_docs_promote.add_argument("feature", help="Feature name")
+    p_docs_promote.set_defaults(func=cmd_docs_promote)
+
+    # docs archive <feature>
+    p_docs_archive = docs_subparsers.add_parser("archive", help="Archive completed feature docs")
+    p_docs_archive.add_argument("feature", help="Feature name")
+    p_docs_archive.set_defaults(func=cmd_docs_archive)
 
     args = parser.parse_args()
     return args.func(args)
