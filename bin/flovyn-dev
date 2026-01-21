@@ -1259,9 +1259,9 @@ def cmd_list_remote(args: argparse.Namespace, phase_filter: Optional[str], kind_
 
     # Apply filters
     if phase_filter:
-        items = [i for i in items if i.get("phase", "").lower() == phase_filter.lower()]
+        items = [i for i in items if (i.get("phase") or "").lower() == phase_filter.lower()]
     if kind_filter:
-        items = [i for i in items if i.get("kind", "").lower() == kind_filter.lower()]
+        items = [i for i in items if (i.get("kind") or "").lower() == kind_filter.lower()]
 
     if not items:
         print(colored("No items found.", Colors.YELLOW))
@@ -1609,11 +1609,11 @@ def cmd_pick(args: argparse.Namespace) -> int:
 
     # Filter by phase (default: Backlog)
     if phase_filter:
-        items = [i for i in items if i.get("phase", "").lower() == phase_filter.lower()]
+        items = [i for i in items if (i.get("phase") or "").lower() == phase_filter.lower()]
 
     # Filter by Kind=Research if --research flag is set
     if research_mode:
-        items = [i for i in items if i.get("kind", "").lower() == "research"]
+        items = [i for i in items if (i.get("kind") or "").lower() == "research"]
 
     # Exclude items that already have local worktrees
     local_worktrees = set(list_all_worktrees())
