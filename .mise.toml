@@ -89,3 +89,24 @@ run = "open http://localhost:3000"
 [tasks.open-docs]
 description = "Open API docs"
 run = "open http://localhost:8000/api/docs"
+
+# SDK Examples (Rust)
+[tasks."example:hello"]
+description = "Run hello-world example worker"
+run = "cd ../sdk-rust && DOTENV_PATH=../dev/.env cargo run -p hello-world-sample"
+
+[tasks."example:ecommerce"]
+description = "Run ecommerce example worker"
+run = "cd ../sdk-rust && DOTENV_PATH=../dev/.env cargo run -p ecommerce-sample"
+
+[tasks."example:pipeline"]
+description = "Run data-pipeline example worker"
+run = "cd ../sdk-rust && DOTENV_PATH=../dev/.env cargo run -p data-pipeline-sample"
+
+[tasks."example:patterns"]
+description = "Run patterns example worker"
+run = "cd ../sdk-rust && DOTENV_PATH=../dev/.env cargo run -p patterns-sample"
+
+[tasks."example:standalone"]
+description = "Run standalone-tasks example worker"
+run = "cd ../sdk-rust && DOTENV_PATH=../dev/.env cargo run -p standalone-tasks-sample"
