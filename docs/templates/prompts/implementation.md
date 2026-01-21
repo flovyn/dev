@@ -2,6 +2,8 @@ You are starting the **Implementation Phase** for: $feature
 
 The design and plan have been reviewed and approved. Now implement the feature.
 
+Unless something is explicitly specified as Deferrable inthe plan, otherwise, you have to implement all of them. You are not taking a decision by yourself.
+
 Read the implementation plan:
 $plan_path
 
