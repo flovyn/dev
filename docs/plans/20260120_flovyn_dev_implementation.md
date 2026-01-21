@@ -8,6 +8,19 @@
 
 Incremental implementation of `flovyn-dev` CLI tool. Each milestone is independently usable.
 
+## Conventions
+
+### Docker Images
+
+All Docker images must be prefixed with the Scaleway container registry:
+```
+rg.fr-par.scw.cloud/flovyn/<image-name>:<tag>
+```
+
+Examples:
+- `rg.fr-par.scw.cloud/flovyn/flovyn-server:latest`
+- `rg.fr-par.scw.cloud/flovyn/rust-examples-worker:latest`
+
 ---
 
 ## Milestone 0: Migrate Existing Documentation
