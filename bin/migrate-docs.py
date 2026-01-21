@@ -22,7 +22,9 @@ MAPPING_FILE = TARGET_DIR / "migration-map.txt"
 # Source directories (path, repo_name)
 SOURCES = [
     (WORKSPACE / "flovyn-server" / ".dev" / "docs", "flovyn-server"),
+    (WORKSPACE / "flovyn-server" / "docs", "flovyn-server"),
     (WORKSPACE / "flovyn-app" / ".dev" / "docs", "flovyn-app"),
+    (WORKSPACE / "flovyn-app" / "docs", "flovyn-app"),
     (WORKSPACE / "sdk-rust" / ".dev" / "docs", "sdk-rust"),
     (WORKSPACE / "sdk-kotlin" / ".dev" / "docs", "sdk-kotlin"),
 ]
