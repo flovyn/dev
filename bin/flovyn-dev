@@ -57,17 +57,39 @@ UNTRACKED_FILES = [
     # "sdk-rust/examples/.env",  # Add files here if needed
 ]
 
-# Documentation directories (relative to dev/)
-DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
-TEMPLATES_DIR = DOCS_DIR / "templates"
-DESIGN_DIR = DOCS_DIR / "design"
-PLANS_DIR = DOCS_DIR / "plans"
-RESEARCH_DIR = DOCS_DIR / "research"
-FEATURES_DIR = DOCS_DIR / "features"  # For large features
-ARCHIVE_DIR = DOCS_DIR / "archive"
+# Documentation directories (relative to dev/) - defaults to main branch
+_MAIN_DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
+TEMPLATES_DIR = _MAIN_DOCS_DIR / "templates"
 
-# Prompt templates directory
-PROMPTS_DIR = DOCS_DIR / "templates" / "prompts"
+# Prompt templates directory (always from main, not worktree)
+PROMPTS_DIR = _MAIN_DOCS_DIR / "templates" / "prompts"
+
+
+def get_docs_dir() -> Path:
+    """Get the docs directory, preferring worktree if we're inside one."""
+    cwd = Path.cwd().resolve()
+    # Check if we're inside a worktree
+    if WORKTREES_DIR in cwd.parents or cwd == WORKTREES_DIR:
+        # Extract worktree path - find the worktree root
+        parts = cwd.parts
+        try:
+            wt_idx = parts.index(WORKTREES_DIR.name)
+            if wt_idx + 1 < len(parts):
+                worktree_docs = WORKTREES_DIR / parts[wt_idx + 1] / "dev" / "docs"
+                if worktree_docs.exists():
+                    return worktree_docs
+        except (ValueError, IndexError):
+            pass
+    return _MAIN_DOCS_DIR
+
+
+# Keep static references pointing to main branch (for templates, creation)
+DOCS_DIR = _MAIN_DOCS_DIR
+DESIGN_DIR = _MAIN_DOCS_DIR / "design"
+PLANS_DIR = _MAIN_DOCS_DIR / "plans"
+RESEARCH_DIR = _MAIN_DOCS_DIR / "research"
+FEATURES_DIR = _MAIN_DOCS_DIR / "features"
+ARCHIVE_DIR = _MAIN_DOCS_DIR / "archive"
 
 # GitHub Project configuration
 GITHUB_ORG = "flovyn"
@@ -256,11 +278,20 @@ def is_large_feature(feature: str) -> bool:
 
 
 def find_feature_docs(feature: str) -> dict[str, list[Path]]:
-    """Find all docs for a feature. Returns dict with 'design', 'plan' keys."""
+    """Find all docs for a feature. Returns dict with 'design', 'plan' keys.
+
+    Uses get_docs_dir() to find docs in worktree if running from one.
+    """
     docs = {"design": [], "plan": []}
 
+    # Get context-aware docs directory (worktree or main)
+    docs_dir = get_docs_dir()
+    design_dir = docs_dir / "design"
+    plans_dir = docs_dir / "plans"
+    features_dir = docs_dir / "features"
+
     # Check large feature structure first
-    feature_dir = FEATURES_DIR / feature
+    feature_dir = features_dir / feature
     if feature_dir.exists():
         for f in feature_dir.iterdir():
             if f.suffix == ".md":
@@ -275,15 +306,15 @@ def find_feature_docs(feature: str) -> dict[str, list[Path]]:
 
     # Check standard structure (files with feature name)
     # Pattern: YYYYMMDD_{feature}.md or {feature}.md
-    if DESIGN_DIR.exists():
-        for f in DESIGN_DIR.iterdir():
+    if design_dir.exists():
+        for f in design_dir.iterdir():
             if f.suffix == ".md":
                 stem_normalized = f.stem.replace("-", "_")
                 if feature_normalized in stem_normalized:
                     docs["design"].append(f)
 
-    if PLANS_DIR.exists():
-        for f in PLANS_DIR.iterdir():
+    if plans_dir.exists():
+        for f in plans_dir.iterdir():
             if f.suffix == ".md":
                 stem_normalized = f.stem.replace("-", "_")
                 if feature_normalized in stem_normalized:
@@ -1399,7 +1430,7 @@ def cmd_open(args: argparse.Namespace) -> int:
 
     # Open in editor
     editor = os.environ.get("EDITOR", "vim")
-    print(f"Opening {doc_path.relative_to(DOCS_DIR)} in {editor}...")
+    print(f"Opening {doc_path.relative_to(get_docs_dir())} in {editor}...")
     os.execvp(editor, [editor, str(doc_path)])
     return 0
 
@@ -1421,15 +1452,16 @@ def cmd_docs(args: argparse.Namespace) -> int:
 
     print()
 
+    docs_dir = get_docs_dir()
     if docs["design"]:
         print(colored("Design:", Colors.CYAN))
         for doc in docs["design"]:
-            print(f"  {doc.relative_to(DOCS_DIR)}")
+            print(f"  {doc.relative_to(docs_dir)}")
 
     if docs["plan"]:
         print(colored("Plan:", Colors.CYAN))
         for doc in docs["plan"]:
-            print(f"  {doc.relative_to(DOCS_DIR)}")
+            print(f"  {doc.relative_to(docs_dir)}")
 
     return 0
 
