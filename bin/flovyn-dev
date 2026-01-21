@@ -7,8 +7,8 @@ Each worktree gets its own set of ports for all services.
 """
 
 import argparse
-import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -23,7 +23,6 @@ from typing import Optional
 # Repository root (parent of dev/)
 FLOVYN_ROOT = Path(__file__).resolve().parent.parent.parent
 WORKTREES_DIR = FLOVYN_ROOT / "worktrees"
-PORTS_FILE = Path.home() / ".flovyn" / "ports.json"
 
 # Repositories to manage
 REPOS = [
@@ -72,7 +71,7 @@ def colored(text: str, color: str) -> str:
 
 
 # =============================================================================
-# Port Allocation
+# Port Allocation (reads from .env files)
 # =============================================================================
 
 @dataclass
@@ -81,62 +80,71 @@ class PortAllocation:
     ports: dict[str, int]
 
 
-def load_ports() -> dict:
-    """Load port allocations from file."""
-    if not PORTS_FILE.exists():
-        return {"allocations": {}, "next_offset": 1}
-    with open(PORTS_FILE) as f:
-        return json.load(f)
+def parse_env_file(env_path: Path) -> dict[str, str]:
+    """Parse a .env file and return key-value pairs."""
+    if not env_path.exists():
+        return {}
+
+    result = {}
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, _, value = line.partition("=")
+                result[key.strip()] = value.strip()
+    return result
 
 
-def save_ports(data: dict) -> None:
-    """Save port allocations to file."""
-    PORTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(PORTS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+def get_ports_from_env(feature: str) -> Optional[PortAllocation]:
+    """Get ports by reading the worktree's .env file."""
+    env_path = WORKTREES_DIR / feature / "dev" / ".env"
+    if not env_path.exists():
+        return None
 
+    env_vars = parse_env_file(env_path)
 
-def allocate_ports(feature: str) -> PortAllocation:
-    """Allocate ports for a new feature."""
-    data = load_ports()
+    ports = {}
+    for port_name in BASE_PORTS:
+        if port_name in env_vars:
+            try:
+                ports[port_name] = int(env_vars[port_name])
+            except ValueError:
+                pass
 
-    if feature in data["allocations"]:
-        alloc = data["allocations"][feature]
-        return PortAllocation(
-            offset=alloc["offset"],
-            ports={k: v for k, v in alloc.items() if k != "offset"}
-        )
+    if not ports:
+        return None
 
-    offset = data["next_offset"]
-    ports = {name: base + offset for name, base in BASE_PORTS.items()}
-
-    data["allocations"][feature] = {"offset": offset, **ports}
-    data["next_offset"] = offset + 1
-    save_ports(data)
+    # Calculate offset from APP_PORT
+    offset = ports.get("APP_PORT", BASE_PORTS["APP_PORT"]) - BASE_PORTS["APP_PORT"]
 
     return PortAllocation(offset=offset, ports=ports)
 
 
-def release_ports(feature: str) -> bool:
-    """Release ports for a feature."""
-    data = load_ports()
-    if feature in data["allocations"]:
-        del data["allocations"][feature]
-        save_ports(data)
-        return True
-    return False
+def get_next_offset() -> int:
+    """Calculate next available offset by scanning existing worktrees."""
+    max_offset = 0
+
+    for feature in list_all_worktrees():
+        allocation = get_ports_from_env(feature)
+        if allocation and allocation.offset > max_offset:
+            max_offset = allocation.offset
+
+    return max_offset + 1
 
 
-def get_ports(feature: str) -> Optional[PortAllocation]:
-    """Get allocated ports for a feature."""
-    data = load_ports()
-    if feature not in data["allocations"]:
-        return None
-    alloc = data["allocations"][feature]
-    return PortAllocation(
-        offset=alloc["offset"],
-        ports={k: v for k, v in alloc.items() if k != "offset"}
-    )
+def allocate_ports(feature: str) -> PortAllocation:
+    """Allocate ports for a new feature."""
+    # Check if already allocated
+    existing = get_ports_from_env(feature)
+    if existing:
+        return existing
+
+    offset = get_next_offset()
+    ports = {name: base + offset for name, base in BASE_PORTS.items()}
+
+    return PortAllocation(offset=offset, ports=ports)
 
 
 # =============================================================================
@@ -376,13 +384,6 @@ def cmd_delete(args: argparse.Namespace) -> int:
             if result.returncode == 0:
                 print(f"    {repo}: branch deleted")
 
-    # Release ports
-    print(f"  Releasing ports...", end=" ")
-    if release_ports(feature):
-        print(colored("✓", Colors.GREEN))
-    else:
-        print(colored("(not allocated)", Colors.YELLOW))
-
     print()
     print(colored(f"Worktree '{feature}' deleted.", Colors.GREEN))
     return 0
@@ -503,18 +504,14 @@ def cmd_list(args: argparse.Namespace) -> int:
     print(colored("Worktrees:", Colors.BLUE))
     print()
 
-    ports_data = load_ports()
-
     for feature in worktrees:
         repos = get_worktree_repos(feature)
-        ports = ports_data.get("allocations", {}).get(feature, {})
+        allocation = get_ports_from_env(feature)
 
         print(colored(f"  {feature}", Colors.CYAN))
         print(f"    Repos: {', '.join(repos)}")
-        if ports:
-            app_port = ports.get("APP_PORT", "?")
-            server_port = ports.get("SERVER_HTTP_PORT", "?")
-            print(f"    Ports: app={app_port}, server={server_port}")
+        if allocation:
+            print(f"    Ports: app={allocation.ports.get('APP_PORT', '?')}, server={allocation.ports.get('SERVER_HTTP_PORT', '?')}")
         print()
 
     return 0
@@ -524,10 +521,11 @@ def cmd_env(args: argparse.Namespace) -> int:
     """Show allocated ports for a feature."""
     feature = args.feature
 
-    allocation = get_ports(feature)
+    allocation = get_ports_from_env(feature)
 
     if not allocation:
-        print(colored(f"Error: No ports allocated for '{feature}'", Colors.RED))
+        print(colored(f"Error: No .env found for '{feature}'", Colors.RED))
+        print(f"Expected: {WORKTREES_DIR / feature / 'dev' / '.env'}")
         return 1
 
     print(colored(f"Environment for: {feature}", Colors.BLUE))
@@ -539,11 +537,11 @@ def cmd_env(args: argparse.Namespace) -> int:
 
     print()
     print(colored("URLs:", Colors.CYAN))
-    print(f"  App:         http://localhost:{allocation.ports['APP_PORT']}")
-    print(f"  Server HTTP: http://localhost:{allocation.ports['SERVER_HTTP_PORT']}")
-    print(f"  Server gRPC: localhost:{allocation.ports['SERVER_GRPC_PORT']}")
-    print(f"  Jaeger UI:   http://localhost:{allocation.ports['JAEGER_UI_PORT']}")
-    print(f"  NATS:        localhost:{allocation.ports['NATS_PORT']}")
+    print(f"  App:         http://localhost:{allocation.ports.get('APP_PORT', '?')}")
+    print(f"  Server HTTP: http://localhost:{allocation.ports.get('SERVER_HTTP_PORT', '?')}")
+    print(f"  Server gRPC: localhost:{allocation.ports.get('SERVER_GRPC_PORT', '?')}")
+    print(f"  Jaeger UI:   http://localhost:{allocation.ports.get('JAEGER_UI_PORT', '?')}")
+    print(f"  NATS:        localhost:{allocation.ports.get('NATS_PORT', '?')}")
 
     return 0
 

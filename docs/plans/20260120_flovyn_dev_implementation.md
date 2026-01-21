@@ -236,43 +236,55 @@ mise run example:hello  # Connects to http://localhost:9091
 
 **Goal:** Replace `worktree.py` with `flovyn-dev` in `dev/bin/`, preserving existing functionality.
 
+**Status:** ✅ Complete
+
 ### TODO
 
-- [ ] **1.1** Create CLI skeleton
-  - [ ] Create `dev/bin/flovyn-dev` (Python)
-  - [ ] Set up argument parsing (argparse or click)
-  - [ ] Add `--help` for all commands
-  - [ ] Make executable (`chmod +x`)
+- [x] **1.1** Create CLI skeleton
+  - [x] Create `dev/bin/flovyn-dev` (Python)
+  - [x] Set up argument parsing (argparse)
+  - [x] Add `--help` for all commands
+  - [x] Make executable (`chmod +x`)
 
-- [ ] **1.2** Port `create` command
-  - [ ] Create worktrees for all repos (dev, flovyn-server, flovyn-app, sdk-*)
-  - [ ] Create branches in each repo
-  - [ ] Handle already-exists errors gracefully
+- [x] **1.2** Port `create` command
+  - [x] Create worktrees for all repos (dev, flovyn-server, flovyn-app, sdk-*)
+  - [x] Create branches in each repo
+  - [x] Handle already-exists errors gracefully
+  - [x] **Port allocation**: Generate unique ports in `worktrees/{feature}/dev/.env`
+  - [x] Ports derived from offset (base + offset for each port)
 
-- [ ] **1.3** Port `delete` command
-  - [ ] Remove worktrees from all repos
-  - [ ] Handle not-exists errors gracefully
+- [x] **1.3** Port `delete` command
+  - [x] Remove worktrees from all repos
+  - [x] Handle not-exists errors gracefully
+  - [x] Warning for uncommitted changes (with `--force` to override)
+  - [x] Optional `--delete-branches` flag
 
-- [ ] **1.4** Port `status` command
-  - [ ] Show git status for each repo in worktree
-  - [ ] Summarize: clean/dirty, ahead/behind
+- [x] **1.4** Port `status` command
+  - [x] Show git status for each repo in worktree
+  - [x] Summarize: clean/dirty, ahead/behind
 
-- [ ] **1.5** Port `commit` command
-  - [ ] Stage all changes in each repo
-  - [ ] Commit with same message across repos
-  - [ ] Show summary of what was committed
+- [x] **1.5** Port `commit` command
+  - [x] Stage all changes in each repo
+  - [x] Commit with same message across repos
+  - [x] Show summary of what was committed
 
-- [ ] **1.6** Port `list` command
-  - [ ] List all local worktrees
-  - [ ] Show which repos each worktree contains
+- [x] **1.6** Port `list` command
+  - [x] List all local worktrees
+  - [x] Show port offset for each worktree
 
-- [ ] **1.7** Add untracked file copying
-  - [ ] Define `UNTRACKED_FILES` list (e.g., `sdk-rust/examples/.env`)
-  - [ ] Copy from main to worktree on `create`
+- [x] **1.7** Add `env` command
+  - [x] Show all allocated ports and URLs for a feature
+  - [x] Read ports from worktree's `dev/.env` file
 
-- [ ] **1.8** Deprecate old script
-  - [ ] Add deprecation warning to `bin/worktree.py`
-  - [ ] Point users to `dev/bin/flovyn-dev`
+### Implementation Notes
+
+**Simplified port tracking:** Instead of maintaining a separate `~/.flovyn/ports.json` file, the CLI reads ports directly from each worktree's `dev/.env` file. The next available offset is calculated by scanning existing worktrees.
+
+**Port allocation on create:**
+```
+Offset 1: APP_PORT=3001, SERVER_HTTP_PORT=8001, SERVER_GRPC_PORT=9091, ...
+Offset 2: APP_PORT=3002, SERVER_HTTP_PORT=8002, SERVER_GRPC_PORT=9092, ...
+```
 
 ### Test
 
@@ -280,12 +292,13 @@ mise run example:hello  # Connects to http://localhost:9091
 flovyn-dev create test-feature
 flovyn-dev list
 flovyn-dev status test-feature
+flovyn-dev env test-feature
 flovyn-dev delete test-feature
 ```
 
 ### Usable After
 
-Basic worktree management from new location.
+Basic worktree management with port isolation from new location.
 
 ---
 
@@ -476,66 +489,18 @@ GitHub-driven workflow.
 
 ---
 
-## ~~Milestone 5: Per-Worktree Docker Environment~~ → Simplified to Port Allocation
+## ~~Milestone 5: Per-Worktree Docker Environment~~ → Integrated into Milestone 1
 
-**Status:** 🔄 Simplified - Full isolation via port allocation (no per-worktree Docker images)
+**Status:** ✅ Complete (integrated into Milestone 1)
 
-**Reason:** With Milestone 0.7 (configurable ports in `dev/.env`), we can run multiple fully isolated instances by allocating different ports for ALL services per worktree.
+**Reason:** With Milestone 0.7 (configurable ports in `dev/.env`), we can run multiple fully isolated instances by allocating different ports for ALL services per worktree. Port allocation was integrated directly into the `flovyn-dev create` command.
 
-**New approach:**
+**Implementation:**
 - Each worktree gets its own `dev/.env` with unique ports for ALL services
+- Ports are derived from offset (scanned from existing worktrees)
+- No separate tracking file needed - ports are read directly from `.env` files
 - Each worktree runs its own infrastructure (postgres, nats, jaeger) on unique ports
-- Services run via `mise run start`, `mise run server`, `mise run app` from each worktree
 - Complete isolation - no shared infrastructure between worktrees
-
-### TODO (Simplified)
-
-- [ ] **Port allocation on worktree create**
-  - [ ] Track allocated ports in `~/.flovyn/ports.json`
-  - [ ] Allocate unique ports for ALL services (offset from base ports)
-  - [ ] Generate `worktrees/{feature}/dev/.env` with all allocated ports
-  - [ ] Release ports on worktree delete
-
-- [ ] **Implement `flovyn-dev env <feature>`**
-  - [ ] Show all allocated ports and URLs for the feature
-
-### Port Allocation Schema
-
-All services get unique ports per worktree:
-
-```json
-{
-  "allocations": {
-    "webhook-retry": {
-      "offset": 1,
-      "APP_PORT": 3001,
-      "SERVER_HTTP_PORT": 8001,
-      "SERVER_GRPC_PORT": 9091,
-      "SERVER_POSTGRES_PORT": 5436,
-      "APP_POSTGRES_PORT": 5434,
-      "NATS_PORT": 4223,
-      "NATS_MONITOR_PORT": 8223,
-      "JAEGER_UI_PORT": 16687,
-      "JAEGER_OTLP_GRPC_PORT": 4318,
-      "JAEGER_OTLP_HTTP_PORT": 4319
-    },
-    "schedules": {
-      "offset": 2,
-      "APP_PORT": 3002,
-      "SERVER_HTTP_PORT": 8002,
-      "SERVER_GRPC_PORT": 9092,
-      "SERVER_POSTGRES_PORT": 5437,
-      "APP_POSTGRES_PORT": 5435,
-      "NATS_PORT": 4224,
-      "NATS_MONITOR_PORT": 8224,
-      "JAEGER_UI_PORT": 16688,
-      "JAEGER_OTLP_GRPC_PORT": 4319,
-      "JAEGER_OTLP_HTTP_PORT": 4320
-    }
-  },
-  "next_offset": 3
-}
-```
 
 ### Running Multiple Features in Parallel
 
@@ -634,9 +599,8 @@ Research workflow for exploration tasks.
   - [ ] Show clear error messages
 
 - [ ] **6.4** Implement archive cleanup
-  - [ ] Release port allocation (update `~/.flovyn/ports.json`)
   - [ ] Archive docs (`flovyn-dev docs archive`)
-  - [ ] Remove worktrees
+  - [ ] Remove worktrees (which removes the .env with ports)
   - [ ] Kill tmux session
   - [ ] Update GitHub status: → Done
 
@@ -659,7 +623,6 @@ flovyn-dev archive webhook-retry
 # Check cleanup:
 ls worktrees/ | grep webhook-retry  # Should not exist
 tmux list-sessions | grep webhook-retry  # Should not exist
-cat ~/.flovyn/ports.json  # Should not have webhook-retry
 ```
 
 ### Usable After
@@ -676,16 +639,16 @@ Complete end-to-end workflow.
 | 0.5 | Standardize on Mise | M0 | Low | ✅ Done |
 | 0.6 | Centralized APP_URL | M0.5 | Low | ✅ Done |
 | 0.7 | Configurable Ports | M0.6 | Low | ✅ Done |
-| 1 | CLI + Worktrees | M0 | Low | |
+| 1 | CLI + Worktrees + Port Allocation | M0 | Low | ✅ Done |
 | 2 | Doc templates + lifecycle | M1 | Low | |
 | 3 | Tmux + Claude | M1, M2 | Medium | |
 | 4 | GitHub Projects | M1, M2, M3 | Medium | |
-| ~~5~~ | ~~Docker per-worktree~~ → Port allocation | M1 | Low | Simplified |
+| ~~5~~ | ~~Docker per-worktree~~ → Port allocation | M1 | Low | ✅ Integrated into M1 |
 | 5 | Research workflow | M1, M2, M3, M4 | Low | |
 | 6 | PR + Archive | M1, M4 | Medium | |
 
 **Recommended order:** 0 → 0.5 → 0.6 → 0.7 → 1 → 2 → 3 → 4 → 5 → 6
 
-Port allocation (formerly M5) is now integrated into M1 (worktree create).
+Port allocation (formerly M5) was integrated into M1 (worktree create).
 
 Each milestone can be tested independently before proceeding.
