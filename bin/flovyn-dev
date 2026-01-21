@@ -877,6 +877,56 @@ def gh_add_issue_comment(repo: str, issue_number: int, body: str) -> None:
     )
 
 
+FLOVYN_TRACKING_MARKER = "<!-- flovyn-tracking -->"
+
+
+def gh_get_issue_body(repo: str, issue_number: int) -> str:
+    """Get the body of a GitHub issue."""
+    result = subprocess.run(
+        ["gh", "issue", "view", str(issue_number), "--repo", repo, "--json", "body"],
+        capture_output=True, text=True, check=True
+    )
+    data = json.loads(result.stdout)
+    return data.get("body", "")
+
+
+def gh_update_issue_body(repo: str, issue_number: int, body: str) -> None:
+    """Update the body of a GitHub issue."""
+    subprocess.run(
+        ["gh", "issue", "edit", str(issue_number), "--repo", repo, "--body", body],
+        check=True,
+        capture_output=True
+    )
+
+
+def gh_update_issue_tracking(repo: str, issue_number: int, phase: str, branch: str, summary: str) -> None:
+    """Update the flovyn tracking section in an issue body."""
+    current_body = gh_get_issue_body(repo, issue_number)
+
+    # Build tracking section
+    tracking_section = f"""{FLOVYN_TRACKING_MARKER}
+
+---
+
+## 📊 Flovyn Tracking
+
+**Phase:** {phase}
+**Branch:** `{branch}`
+
+{summary}"""
+
+    # Check if tracking section exists
+    if FLOVYN_TRACKING_MARKER in current_body:
+        # Replace existing tracking section
+        marker_pos = current_body.find(FLOVYN_TRACKING_MARKER)
+        new_body = current_body[:marker_pos].rstrip() + "\n\n" + tracking_section
+    else:
+        # Append tracking section
+        new_body = current_body.rstrip() + "\n\n" + tracking_section
+
+    gh_update_issue_body(repo, issue_number, new_body)
+
+
 def gh_find_item_by_branch(branch: str) -> Optional[dict]:
     """Find a project item by branch name."""
     items = gh_list_project_items()
@@ -1733,14 +1783,14 @@ def cmd_pick(args: argparse.Namespace) -> int:
         if result != 0:
             return result
 
-        # Post comment to issue (no phase change for research)
+        # Update tracking section (no phase change for research)
         if selected.get("repo") and selected.get("issue_number"):
-            comment = f"🔬 **Started Research**\n\nResearch worktree created: `{branch}`\n\nResearch doc: `dev/docs/research/{get_date_prefix()}_{branch.replace('-', '_')}.md`"
+            summary = f"### Research\n\nResearch doc: `dev/docs/research/{get_date_prefix()}_{branch.replace('-', '_')}.md`"
             try:
-                gh_add_issue_comment(selected["repo"], selected["issue_number"], comment)
-                print(f"Posted comment to issue #{selected['issue_number']}")
+                gh_update_issue_tracking(selected["repo"], selected["issue_number"], "Research", branch, summary)
+                print(f"Updated issue #{selected['issue_number']}")
             except Exception as e:
-                print(colored(f"Warning: Could not post comment: {e}", Colors.YELLOW))
+                print(colored(f"Warning: Could not update issue: {e}", Colors.YELLOW))
 
     else:
         # Feature mode: create full worktree
@@ -1773,11 +1823,11 @@ def cmd_pick(args: argparse.Namespace) -> int:
                     )
                     print(colored("✓", Colors.GREEN))
 
-                    # Post comment to issue
+                    # Update tracking section
                     if selected.get("repo") and selected.get("issue_number"):
-                        comment = f"🚀 **Started Design Phase**\n\nWorktree created: `{branch}`\n\nDesign doc: `dev/docs/design/{get_date_prefix()}_{branch.replace('-', '_')}.md`"
-                        gh_add_issue_comment(selected["repo"], selected["issue_number"], comment)
-                        print(f"Posted comment to issue #{selected['issue_number']}")
+                        summary = f"### Design\n\nDesign doc: `dev/docs/design/{get_date_prefix()}_{branch.replace('-', '_')}.md`\n\n*Working on design document...*"
+                        gh_update_issue_tracking(selected["repo"], selected["issue_number"], "Design", branch, summary)
+                        print(f"Updated issue #{selected['issue_number']}")
 
             except RuntimeError as e:
                 print(colored(f"Warning: Could not update Phase: {e}", Colors.YELLOW))
@@ -1838,57 +1888,65 @@ def cmd_move(args: argparse.Namespace) -> int:
         print(colored(f"Error: {e}", Colors.RED))
         return 1
 
-    # Post summary to GitHub issue based on transition
+    # Update tracking section in GitHub issue
     if item.get("repo") and item.get("issue_number"):
-        comment = generate_phase_transition_comment(feature, current_phase, new_phase)
-        if comment:
-            print(f"Posting update to issue #{item['issue_number']}...", end=" ")
-            try:
-                gh_add_issue_comment(item["repo"], item["issue_number"], comment)
-                print(colored("✓", Colors.GREEN))
-            except Exception as e:
-                print(colored(f"Warning: {e}", Colors.YELLOW))
+        summary = generate_phase_tracking_summary(feature, new_phase)
+        print(f"Updating issue #{item['issue_number']}...", end=" ")
+        try:
+            gh_update_issue_tracking(item["repo"], item["issue_number"], new_phase, feature, summary)
+            print(colored("✓", Colors.GREEN))
+        except Exception as e:
+            print(colored(f"Warning: {e}", Colors.YELLOW))
 
     print()
     print(colored(f"Moved '{feature}' from {current_phase} to {new_phase}", Colors.GREEN))
     return 0
 
 
-def generate_phase_transition_comment(feature: str, from_phase: str, to_phase: str) -> Optional[str]:
-    """Generate a GitHub comment for phase transitions with doc summaries."""
+def generate_phase_tracking_summary(feature: str, phase: str) -> str:
+    """Generate summary content for the tracking section based on phase."""
     docs = find_feature_docs(feature)
 
-    if to_phase == "Planning" and from_phase == "Design":
+    if phase == "Design":
+        return "*Working on design document...*"
+
+    elif phase == "Planning":
         # Extract design summary
         if docs["design"]:
             summary = extract_doc_summary(docs["design"][0], ["Problem Statement", "Solution"])
             if summary:
-                return f"📋 **Moving to Planning Phase**\n\n## Design Summary\n\n{summary}"
-        return "📋 **Moving to Planning Phase**"
+                return f"### Design Summary\n\n{summary}"
+        return "*Design complete, creating implementation plan...*"
 
-    elif to_phase == "In Progress" and from_phase == "Planning":
+    elif phase == "In Progress":
         # Extract plan TODO list
         if docs["plan"]:
             done, total, completed, pending = extract_todo_progress(docs["plan"][0])
-            todo_list = "\n".join([f"- [ ] {item}" for item in pending[:10]])
-            if len(pending) > 10:
-                todo_list += f"\n- ... and {len(pending) - 10} more"
+            progress_pct = int((done / total * 100)) if total > 0 else 0
 
-            return f"🚀 **Starting Implementation**\n\n**Progress:** 0/{total} tasks\n\n## Next Tasks\n\n{todo_list}"
-        return "🚀 **Starting Implementation**"
+            summary = f"### Progress\n\n**{done}/{total}** tasks completed ({progress_pct}%)\n"
 
-    elif to_phase == "Review":
+            if pending:
+                todo_list = "\n".join([f"- [ ] {item}" for item in pending[:5]])
+                if len(pending) > 5:
+                    todo_list += f"\n- ... and {len(pending) - 5} more"
+                summary += f"\n### Next Tasks\n\n{todo_list}"
+
+            return summary
+        return "*Implementation in progress...*"
+
+    elif phase == "Review":
         # Show final progress
         if docs["plan"]:
             done, total, completed, pending = extract_todo_progress(docs["plan"][0])
             progress_pct = int((done / total * 100)) if total > 0 else 0
-            return f"👀 **Ready for Review**\n\n**Progress:** {done}/{total} tasks ({progress_pct}%)"
-        return "👀 **Ready for Review**"
+            return f"### Progress\n\n**{done}/{total}** tasks completed ({progress_pct}%)\n\n*Ready for review*"
+        return "*Ready for review*"
 
-    elif to_phase == "Done":
-        return "✅ **Completed**"
+    elif phase == "Done":
+        return "### Status\n\n✅ **Completed**"
 
-    return None
+    return ""
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
@@ -1952,22 +2010,13 @@ def cmd_sync(args: argparse.Namespace) -> int:
         for branch in in_sync:
             item = next((i for i in items if i.get("branch") == branch), None)
             if item and item.get("phase") == "In Progress" and item.get("repo") and item.get("issue_number"):
-                docs = find_feature_docs(branch)
-                if docs["plan"]:
-                    done, total_tasks, _, pending = extract_todo_progress(docs["plan"][0])
-                    if total_tasks > 0:
-                        progress_pct = int((done / total_tasks * 100))
-                        comment = f"📊 **Progress Update**\n\n**Status:** {done}/{total_tasks} tasks ({progress_pct}%)"
-                        if pending:
-                            next_task = pending[0] if pending else "None"
-                            comment += f"\n\n**Next:** {next_task}"
-
-                        print(f"  Updating {branch}...", end=" ")
-                        try:
-                            gh_add_issue_comment(item["repo"], item["issue_number"], comment)
-                            print(colored("✓", Colors.GREEN))
-                        except Exception as e:
-                            print(colored(f"✗ {e}", Colors.RED))
+                summary = generate_phase_tracking_summary(branch, "In Progress")
+                print(f"  Updating {branch}...", end=" ")
+                try:
+                    gh_update_issue_tracking(item["repo"], item["issue_number"], "In Progress", branch, summary)
+                    print(colored("✓", Colors.GREEN))
+                except Exception as e:
+                    print(colored(f"✗ {e}", Colors.RED))
 
     return 0
 
@@ -2191,16 +2240,16 @@ def cmd_pr(args: argparse.Namespace) -> int:
         for repo, url in created_prs:
             print(f"  - {repo}: {url}")
 
-        # Update GitHub Project item
+        # Update tracking section with PR links
         try:
             item = gh_find_item_by_branch(feature)
             if item and item.get("repo") and item.get("issue_number"):
-                # Post comment with PR links
                 pr_list = "\n".join([f"- [{repo}]({url})" for repo, url in created_prs])
-                comment = f"📬 **Pull Requests Created**\n\n{pr_list}"
-                gh_add_issue_comment(item["repo"], item["issue_number"], comment)
+                summary = f"### Pull Requests\n\n{pr_list}\n\n*Waiting for review and merge*"
+                current_phase = item.get("phase", "Review")
+                gh_update_issue_tracking(item["repo"], item["issue_number"], current_phase, feature, summary)
                 print()
-                print(f"Posted PR links to issue #{item['issue_number']}")
+                print(f"Updated issue #{item['issue_number']} with PR links")
         except Exception as e:
             print(colored(f"Warning: Could not update GitHub issue: {e}", Colors.YELLOW))
 
@@ -2307,10 +2356,10 @@ def cmd_archive(args: argparse.Namespace) -> int:
                 )
                 print(colored("✓", Colors.GREEN))
 
-                # Post completion comment
+                # Update tracking section to Done
                 if item.get("repo") and item.get("issue_number"):
-                    comment = "✅ **Feature Archived**\n\nWorktrees removed. Docs archived."
-                    gh_add_issue_comment(item["repo"], item["issue_number"], comment)
+                    summary = "### Status\n\n✅ **Completed**\n\nWorktrees removed. Docs archived."
+                    gh_update_issue_tracking(item["repo"], item["issue_number"], "Done", feature, summary)
             else:
                 print(colored("(Phase field not found)", Colors.YELLOW))
         else:
