@@ -140,7 +140,7 @@ All docs in one place, ready for new workflow.
 
 ## Milestone 0.6: Centralized APP_URL Configuration
 
-**Goal:** Configure flovyn-app base URL centrally from dev repo for remote access (e.g., Tailscale).
+**Goal:** Configure flovyn-app and flovyn-server to use centralized `APP_URL` for OIDC integration (remote access via Tailscale, etc.).
 
 **Status:** ✅ Complete
 
@@ -149,12 +149,18 @@ All docs in one place, ready for new workflow.
 - [x] **0.6.1** Add `APP_URL` to `dev/.env`
   - [x] Default: `http://localhost:3000`
   - [x] Used as OIDC issuer in flovyn-app tokens
-- [x] **0.6.2** Update `dev/dev.sh`
+- [x] **0.6.2** Update `dev/dev.sh` for flovyn-app
   - [x] `start_app()` exports `NEXT_PUBLIC_APP_URL` from `APP_URL`
   - [x] `print_services()` shows configured `APP_URL`
-- [x] **0.6.3** Document in `dev/CLAUDE.md`
+- [x] **0.6.3** Update `dev/dev.sh` for flovyn-server
+  - [x] `start_server()` sets Better Auth env vars from `APP_URL`:
+    - `AUTH__BETTER_AUTH__VALIDATION_URL`
+    - `AUTH__BETTER_AUTH__JWT__JWKS_URI`
+    - `AUTH__BETTER_AUTH__JWT__ISSUER`
+  - [x] Display OIDC provider URL on startup
+- [x] **0.6.4** Document in `dev/CLAUDE.md`
   - [x] Add Key Environment Variables table
-  - [x] Include example for Tailscale access
+  - [x] Add "Remote Access" section explaining APP_URL effects
 
 ### Usage
 
@@ -162,8 +168,9 @@ All docs in one place, ready for new workflow.
 # In dev/.env
 APP_URL=https://your-host.ts.net
 
-# Start app with custom URL
-mise run app  # Uses APP_URL from .env
+# Start services (both use APP_URL)
+mise run server  # Trusts APP_URL as OIDC provider
+mise run app     # Issues tokens with APP_URL as issuer
 ```
 
 ---
