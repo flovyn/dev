@@ -188,6 +188,42 @@ mise run app     # Issues tokens with APP_URL as issuer
 
 ---
 
+## Milestone 0.7: Configurable Ports and SDK Worker URL
+
+**Goal:** Allow running multiple dev instances with custom ports, and have SDK examples automatically use the correct gRPC port.
+
+**Status:** ✅ Complete
+
+### TODO
+
+- [x] **0.7.1** Add configurable application ports to `dev/.env`
+  - [x] `APP_PORT` (default: 3000)
+  - [x] `SERVER_HTTP_PORT` (default: 8000)
+  - [x] `SERVER_GRPC_PORT` (default: 9090)
+- [x] **0.7.2** Update `dev/dev.sh` to use port variables
+  - [x] `start_server()` uses `SERVER_HTTP_PORT` and `SERVER_GRPC_PORT`
+  - [x] `start_app()` uses `APP_PORT`
+  - [x] Respect existing `PORT`, `SERVER_PORT`, `GRPC_SERVER_PORT` env vars (for backwards compatibility)
+- [x] **0.7.3** Compute `FLOVYN_GRPC_SERVER_URL` from `SERVER_GRPC_PORT` in mise tasks
+  - [x] SDK example tasks in `dev/.mise.toml` source `.env` and compute URL dynamically
+  - [x] Workers automatically connect to the correct gRPC port
+- [x] **0.7.4** Update `dev/README.md` with port configuration docs
+- [x] **0.7.5** Update `dev/CLAUDE.md` with port configuration docs
+
+### Usage
+
+```bash
+# In dev/.env - change ports to run multiple instances
+APP_PORT=3001
+SERVER_HTTP_PORT=8001
+SERVER_GRPC_PORT=9091
+
+# SDK examples automatically use SERVER_GRPC_PORT
+mise run example:hello  # Connects to http://localhost:9091
+```
+
+---
+
 ## Milestone 1: CLI Foundation + Worktree Management
 
 **Goal:** Replace `worktree.py` with `flovyn-dev` in `dev/bin/`, preserving existing functionality.
