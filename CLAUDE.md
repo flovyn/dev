@@ -81,10 +81,22 @@ mise run open-docs            # Open API docs
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `APP_PORT` | `3000` | Port for flovyn-app |
+| `SERVER_HTTP_PORT` | `8000` | HTTP port for flovyn-server |
+| `SERVER_GRPC_PORT` | `9090` | gRPC port for flovyn-server |
 | `APP_URL` | `http://localhost:3000` | Base URL for flovyn-app and OIDC issuer |
 | `SCENARIO` | `self-hosted` | Deployment scenario |
 | `SERVER_POSTGRES_PORT` | `5435` | PostgreSQL port for flovyn-server |
 | `APP_POSTGRES_PORT` | `5433` | PostgreSQL port for flovyn-app |
+
+**Running multiple instances:** Change the ports in `.env` to avoid conflicts:
+```bash
+APP_PORT=3001
+SERVER_HTTP_PORT=8001
+SERVER_GRPC_PORT=9091
+APP_URL=http://localhost:3001
+FLOVYN_GRPC_SERVER_URL=http://localhost:9091
+```
 
 ### Remote Access (Tailscale, etc.)
 

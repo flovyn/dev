@@ -47,6 +47,10 @@ print_header() {
 }
 
 print_services() {
+    local app_port="${APP_PORT:-3000}"
+    local server_http_port="${SERVER_HTTP_PORT:-8000}"
+    local server_grpc_port="${SERVER_GRPC_PORT:-9090}"
+
     echo -e "\n${GREEN}Infrastructure Services:${NC}"
     echo -e "  PostgreSQL (Server): localhost:${SERVER_POSTGRES_PORT:-5435}"
     echo -e "  PostgreSQL (App):    localhost:${APP_POSTGRES_PORT:-5433}"
@@ -54,10 +58,10 @@ print_services() {
     echo -e "  Jaeger UI:           http://localhost:${JAEGER_UI_PORT:-16686}"
 
     echo -e "\n${GREEN}Application URLs:${NC}"
-    echo -e "  Flovyn App:          ${APP_URL:-http://localhost:3000}"
-    echo -e "  Flovyn Server HTTP:  http://localhost:8000"
-    echo -e "  Flovyn Server gRPC:  localhost:9090"
-    echo -e "  API Docs:            http://localhost:8000/api/docs"
+    echo -e "  Flovyn App:          ${APP_URL:-http://localhost:$app_port}"
+    echo -e "  Flovyn Server HTTP:  http://localhost:$server_http_port"
+    echo -e "  Flovyn Server gRPC:  localhost:$server_grpc_port"
+    echo -e "  API Docs:            http://localhost:$server_http_port/api/docs"
 }
 
 print_scenario() {
@@ -121,12 +125,19 @@ start_server() {
 
     cd "$SERVER_DIR"
 
-    # Resolve APP_URL for OIDC provider configuration
-    local app_url="${APP_URL:-http://localhost:3000}"
+    # Resolve ports and URLs
+    local app_port="${APP_PORT:-3000}"
+    local server_http_port="${SERVER_HTTP_PORT:-8000}"
+    local server_grpc_port="${SERVER_GRPC_PORT:-9090}"
+    local app_url="${APP_URL:-http://localhost:$app_port}"
 
     export CONFIG_FILE="$config_file"
     export RUST_LOG="${RUST_LOG:-info,flovyn_server=debug}"
     export WORKER_TOKEN_SECRET="${WORKER_TOKEN_SECRET:-dev-secret-key-for-testing-only}"
+
+    # Override ports from environment
+    export SERVER_PORT="$server_http_port"
+    export GRPC_SERVER_PORT="$server_grpc_port"
 
     # Override Better Auth URLs from APP_URL (OIDC provider)
     export AUTH__BETTER_AUTH__VALIDATION_URL="${app_url}/api/auth/validate-key"
@@ -134,7 +145,8 @@ start_server() {
     export AUTH__BETTER_AUTH__JWT__ISSUER="${app_url}"
 
     echo -e "  Config: $config_file"
-    echo -e "  Server: http://localhost:8000"
+    echo -e "  HTTP:   http://localhost:$server_http_port"
+    echo -e "  gRPC:   localhost:$server_grpc_port"
     echo -e "  OIDC Provider: $app_url"
     echo ""
 
@@ -146,12 +158,18 @@ start_app() {
 
     cd "$APP_DIR"
 
+    # Resolve port and URL
+    local app_port="${APP_PORT:-3000}"
+    local app_url="${APP_URL:-http://localhost:$app_port}"
+
     export DATABASE_URL="postgresql://flovyn-app:flovyn-app@localhost:${APP_POSTGRES_PORT:-5433}/flovyn-app"
     export BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-dev-secret-key-for-testing-only}"
-    export NEXT_PUBLIC_APP_URL="${APP_URL:-http://localhost:3000}"
+    export NEXT_PUBLIC_APP_URL="$app_url"
+    export PORT="$app_port"
 
     echo -e "  Database: $DATABASE_URL"
-    echo -e "  App URL:  $NEXT_PUBLIC_APP_URL"
+    echo -e "  App URL:  $app_url"
+    echo -e "  Port:     $app_port"
     echo ""
 
     pnpm --filter web dev
