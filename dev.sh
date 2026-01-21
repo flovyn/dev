@@ -129,7 +129,7 @@ start_server() {
     echo -e "  Server: http://localhost:8000"
     echo ""
 
-    cargo run --profile profiling --bin flovyn-server
+    cargo run --bin flovyn-server
 }
 
 start_app() {
