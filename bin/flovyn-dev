@@ -292,7 +292,7 @@ def find_feature_docs(feature: str) -> dict[str, list[Path]]:
     return docs
 
 
-def create_design_doc(feature: str, large: bool = False) -> Optional[Path]:
+def create_design_doc(feature: str, large: bool = False, issue_repo: Optional[str] = None, issue_number: Optional[int] = None) -> Optional[Path]:
     """Create design doc from template. Returns path to created doc."""
     template_path = TEMPLATES_DIR / "design.md"
     if not template_path.exists():
@@ -305,9 +305,27 @@ def create_design_doc(feature: str, large: bool = False) -> Optional[Path]:
     date_str = date.today().strftime("%Y-%m-%d")
     date_prefix = get_date_prefix()
 
+    # Fetch issue info if available
+    issue_link = ""
+    issue_body = "<!-- Describe the context and background for this feature -->"
+    if issue_repo and issue_number:
+        issue_url = f"https://github.com/{issue_repo}/issues/{issue_number}"
+        issue_link = f"\n**Issue:** [{issue_repo}#{issue_number}]({issue_url})\n"
+        try:
+            body = gh_get_issue_body(issue_repo, issue_number)
+            # Strip the flovyn tracking section if present
+            if FLOVYN_TRACKING_MARKER in body:
+                body = body[:body.find(FLOVYN_TRACKING_MARKER)].rstrip()
+            if body:
+                issue_body = body
+        except Exception:
+            pass  # Keep default placeholder
+
     content = template.replace("{Feature Title}", title)
     content = content.replace("{DATE}", date_str)
     content = content.replace("{feature}", feature)
+    content = content.replace("{issue_link}", issue_link)
+    content = content.replace("{issue_body}", issue_body)
 
     if large:
         # Large feature: create subdirectory
@@ -493,16 +511,6 @@ def get_design_prompt(feature: str, design_path: Optional[Path], issue_repo: Opt
     if issue_repo and issue_number:
         issue_url = f"https://github.com/{issue_repo}/issues/{issue_number}"
         issue_info = f"\nGitHub Issue: {issue_url}\n"
-        # Fetch issue body for context
-        try:
-            issue_body = gh_get_issue_body(issue_repo, issue_number)
-            # Strip the flovyn tracking section if present
-            if FLOVYN_TRACKING_MARKER in issue_body:
-                issue_body = issue_body[:issue_body.find(FLOVYN_TRACKING_MARKER)].rstrip()
-            if issue_body:
-                issue_info += f"\n**Issue Description:**\n\n{issue_body}\n"
-        except Exception:
-            pass  # Ignore errors fetching issue body
 
     return template.substitute(
         feature=feature,
@@ -983,7 +991,7 @@ def cmd_create(args: argparse.Namespace) -> int:
 
     # Create design doc
     print(f"  Creating design doc...", end=" ")
-    design_path = create_design_doc(feature, large=large)
+    design_path = create_design_doc(feature, large=large, issue_repo=issue_repo, issue_number=issue_number)
     if design_path:
         print(colored(f"✓ ({design_path.relative_to(DOCS_DIR)})", Colors.GREEN))
     else:
