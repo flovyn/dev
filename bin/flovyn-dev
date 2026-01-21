@@ -505,12 +505,22 @@ def tmux_kill_session(session_name: str) -> bool:
     return True
 
 
-def tmux_send_keys(session_name: str, keys: str, enter: bool = True) -> None:
-    """Send keys to a tmux session."""
-    cmd = ["tmux", "send-keys", "-t", session_name, keys]
+def tmux_send_keys(session_name: str, keys: str, enter: bool = True, pane: Optional[str] = None) -> None:
+    """Send keys to a tmux session (optionally to a specific pane)."""
+    target = f"{session_name}:{pane}" if pane else session_name
+    cmd = ["tmux", "send-keys", "-t", target, keys]
     if enter:
         cmd.append("Enter")
     subprocess.run(cmd, check=True)
+
+
+def tmux_split_horizontal(session_name: str, working_dir: Optional[Path] = None) -> str:
+    """Create a horizontal split in a tmux session. Returns the new pane ID."""
+    cmd = ["tmux", "split-window", "-h", "-t", session_name, "-P", "-F", "#{pane_id}"]
+    if working_dir:
+        cmd.extend(["-c", str(working_dir)])
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    return result.stdout.strip()
 
 
 def tmux_list_sessions() -> list[dict]:
@@ -538,36 +548,32 @@ def tmux_list_sessions() -> list[dict]:
     return sessions
 
 
-def get_initial_prompt(feature: str, design_path: Optional[Path], issue_repo: Optional[str] = None, issue_number: Optional[int] = None) -> str:
-    """Generate initial prompt for Claude Code."""
-    # Try to load from template
-    template_path = PROMPTS_DIR / "initial.md"
+def get_design_prompt(feature: str, design_path: Optional[Path], issue_repo: Optional[str] = None, issue_number: Optional[int] = None) -> str:
+    """Generate prompt for Design phase - focus on design doc only."""
+    template_path = PROMPTS_DIR / "design.md"
     if template_path.exists():
         template = template_path.read_text()
     else:
-        template = """You are working on feature: {feature}
+        template = """You are starting the **Design Phase** for: {feature}
 {issue_info}
-Please read the design document to understand the feature requirements:
+Your task is to write the design document at:
 {design_path}
 
-After reading the design doc:
-1. Summarize the key requirements
-2. Identify the implementation phases
-3. Ask any clarifying questions before starting
+Focus on:
+1. Understanding the problem (read the GitHub issue if linked)
+2. Defining the Problem Statement clearly
+3. Proposing a Solution at a high level
+4. Identifying key Architecture decisions
+5. Listing any Open Questions that need answers
 
-When ready, create an implementation plan at:
-{plan_path}
+DO NOT write code or create implementation plans yet.
+This phase is about understanding and documenting WHAT we're building and WHY.
+
+When the design is complete, inform me so I can review it before moving to Planning.
 """
 
     design_rel = f"dev/{design_path.relative_to(DOCS_DIR.parent)}" if design_path else "No design doc found"
 
-    # Determine plan path based on feature structure
-    if is_large_feature(feature):
-        plan_path = f"dev/docs/features/{feature}/plan.md"
-    else:
-        plan_path = f"dev/docs/plans/{get_date_prefix()}_{feature.replace('-', '_')}.md"
-
-    # Issue info with URL
     if issue_repo and issue_number:
         issue_url = f"https://github.com/{issue_repo}/issues/{issue_number}"
         issue_info = f"\nGitHub Issue: {issue_url}\n"
@@ -577,9 +583,87 @@ When ready, create an implementation plan at:
     return template.format(
         feature=feature,
         design_path=str(design_rel),
-        plan_path=plan_path,
         issue_info=issue_info,
     )
+
+
+def get_planning_prompt(feature: str) -> str:
+    """Generate prompt for Planning phase - create implementation plan."""
+    template_path = PROMPTS_DIR / "planning.md"
+    if template_path.exists():
+        template = template_path.read_text()
+    else:
+        template = """You are starting the **Planning Phase** for: {feature}
+
+The design has been reviewed and approved. Now create the implementation plan.
+
+First, read the design document:
+{design_path}
+
+Then create an implementation plan at:
+{plan_path}
+
+The plan should include:
+1. Phased TODO list with checkboxes (- [ ] task)
+2. Clear, actionable tasks
+3. Test plan
+4. Any rollout considerations
+
+DO NOT start coding yet.
+This phase is about planning HOW we'll implement the approved design.
+
+When the plan is complete, inform me so I can review it before moving to Implementation.
+"""
+
+    docs = find_feature_docs(feature)
+    design_path = f"dev/{docs['design'][0].relative_to(DOCS_DIR.parent)}" if docs["design"] else "No design doc found"
+
+    if is_large_feature(feature):
+        plan_path = f"dev/docs/features/{feature}/plan.md"
+    else:
+        plan_path = f"dev/docs/plans/{get_date_prefix()}_{feature.replace('-', '_')}.md"
+
+    return template.format(
+        feature=feature,
+        design_path=design_path,
+        plan_path=plan_path,
+    )
+
+
+def get_implementation_prompt(feature: str) -> str:
+    """Generate prompt for Implementation phase - execute the plan."""
+    template_path = PROMPTS_DIR / "implementation.md"
+    if template_path.exists():
+        template = template_path.read_text()
+    else:
+        template = """You are starting the **Implementation Phase** for: {feature}
+
+The design and plan have been reviewed and approved. Now implement the feature.
+
+Read the implementation plan:
+{plan_path}
+
+Work through the TODO items in order:
+1. Mark items as complete [x] as you finish them
+2. Run tests after each significant change
+3. Commit logical chunks of work
+
+If you encounter blockers or need clarification, ask before proceeding.
+"""
+
+    docs = find_feature_docs(feature)
+    plan_path = f"dev/{docs['plan'][0].relative_to(DOCS_DIR.parent)}" if docs["plan"] else "No plan doc found"
+
+    return template.format(
+        feature=feature,
+        plan_path=plan_path,
+    )
+
+
+# Backwards compatibility alias
+def get_initial_prompt(feature: str, design_path: Optional[Path], issue_repo: Optional[str] = None, issue_number: Optional[int] = None) -> str:
+    """Generate initial prompt for Claude Code (Design phase)."""
+    return get_design_prompt(feature, design_path, issue_repo, issue_number)
 
 
 def get_resume_prompt(feature: str) -> str:
@@ -1080,11 +1164,10 @@ def cmd_create(args: argparse.Namespace) -> int:
             # Wait for Claude to initialize
             time.sleep(2)
 
-            # Send initial prompt
-            print(f"  Sending initial prompt...", end=" ")
-            initial_prompt = get_initial_prompt(feature, design_path, issue_repo, issue_number)
-            # Escape for tmux send-keys (use literal-string mode)
-            tmux_send_keys(feature, initial_prompt)
+            # Send Design phase prompt
+            print(f"  Sending Design phase prompt...", end=" ")
+            design_prompt = get_design_prompt(feature, design_path, issue_repo, issue_number)
+            tmux_send_keys(feature, design_prompt)
             print(colored("✓", Colors.GREEN))
         else:
             print(colored("(already exists)", Colors.YELLOW))
@@ -1900,6 +1983,44 @@ def cmd_move(args: argparse.Namespace) -> int:
 
     print()
     print(colored(f"Moved '{feature}' from {current_phase} to {new_phase}", Colors.GREEN))
+
+    # Launch new Claude in horizontal split for phase transition
+    if args.send_prompt and new_phase in ("Planning", "In Progress"):
+        if tmux_session_exists(feature):
+            print()
+            worktree_path = WORKTREES_DIR / feature
+
+            if new_phase == "Planning":
+                print(colored("Creating horizontal split for Planning phase...", Colors.YELLOW))
+                prompt = get_planning_prompt(feature)
+            else:  # In Progress
+                print(colored("Creating horizontal split for Implementation phase...", Colors.YELLOW))
+                prompt = get_implementation_prompt(feature)
+
+            # Create horizontal split and get new pane ID
+            pane_id = tmux_split_horizontal(feature, worktree_path)
+            print(f"  New pane: {pane_id}")
+
+            # Launch Claude in the new pane
+            print(f"  Launching Claude Code...", end=" ")
+            tmux_send_keys(feature, "claude", pane=pane_id)
+            print(colored("✓", Colors.GREEN))
+
+            # Wait for Claude to initialize
+            time.sleep(2)
+
+            # Send phase prompt to new pane
+            print(f"  Sending phase prompt...", end=" ")
+            tmux_send_keys(feature, prompt, pane=pane_id)
+            print(colored("✓", Colors.GREEN))
+
+            print()
+            print(f"Attach with: flovyn-dev attach {feature} --no-resume")
+        else:
+            print()
+            print(colored("No tmux session found.", Colors.YELLOW))
+            print(f"Create one with: flovyn-dev attach {feature}")
+
     return 0
 
 
@@ -2564,7 +2685,9 @@ Examples:
     p_move = subparsers.add_parser("move", help="Move a feature to a new phase in GitHub Project")
     p_move.add_argument("feature", help="Feature/branch name")
     p_move.add_argument("phase", help="New phase (Backlog, Design, Planning, In Progress, Review, Done)")
-    p_move.set_defaults(func=cmd_move)
+    p_move.add_argument("--no-prompt", dest="send_prompt", action="store_false",
+                        help="Don't send phase-specific prompt to tmux session")
+    p_move.set_defaults(func=cmd_move, send_prompt=True)
 
     # sync
     p_sync = subparsers.add_parser("sync", help="Compare local worktrees with GitHub Project items")
