@@ -2255,7 +2255,8 @@ def create_prs_for_feature(feature: str, update_issue: bool = True) -> list[tupl
         pr_template = load_template(TEMPLATES_DIR / "pr_body.md")
 
         if docs["design"]:
-            design_rel = docs["design"][0].relative_to(DOCS_DIR.parent)
+            docs_dir = get_docs_dir()
+            design_rel = docs["design"][0].relative_to(docs_dir.parent)
             design_doc_info = f"See `{design_rel}` for detailed design."
         else:
             design_doc_info = "No design doc found."
