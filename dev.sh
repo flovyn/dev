@@ -125,17 +125,17 @@ start_server() {
 
     cd "$SERVER_DIR"
 
-    # Resolve ports and URLs
+    # Resolve ports (respect existing env vars, then .env, then defaults)
     local app_port="${APP_PORT:-3000}"
-    local server_http_port="${SERVER_HTTP_PORT:-8000}"
-    local server_grpc_port="${SERVER_GRPC_PORT:-9090}"
+    local server_http_port="${SERVER_PORT:-${SERVER_HTTP_PORT:-8000}}"
+    local server_grpc_port="${GRPC_SERVER_PORT:-${SERVER_GRPC_PORT:-9090}}"
     local app_url="${APP_URL:-http://localhost:$app_port}"
 
     export CONFIG_FILE="$config_file"
     export RUST_LOG="${RUST_LOG:-info,flovyn_server=debug}"
     export WORKER_TOKEN_SECRET="${WORKER_TOKEN_SECRET:-dev-secret-key-for-testing-only}"
 
-    # Override ports from environment
+    # Set ports (only if not already set)
     export SERVER_PORT="$server_http_port"
     export GRPC_SERVER_PORT="$server_grpc_port"
 
@@ -158,8 +158,8 @@ start_app() {
 
     cd "$APP_DIR"
 
-    # Resolve port and URL
-    local app_port="${APP_PORT:-3000}"
+    # Resolve port (respect existing PORT env var, then APP_PORT, then default)
+    local app_port="${PORT:-${APP_PORT:-3000}}"
     local app_url="${APP_URL:-http://localhost:$app_port}"
 
     export DATABASE_URL="postgresql://flovyn-app:flovyn-app@localhost:${APP_POSTGRES_PORT:-5433}/flovyn-app"
