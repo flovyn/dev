@@ -81,15 +81,24 @@ mise run open-docs            # Open API docs
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `APP_URL` | `http://localhost:3000` | Base URL for flovyn-app (also used as OIDC issuer) |
+| `APP_URL` | `http://localhost:3000` | Base URL for flovyn-app and OIDC issuer |
 | `SCENARIO` | `self-hosted` | Deployment scenario |
 | `SERVER_POSTGRES_PORT` | `5435` | PostgreSQL port for flovyn-server |
 | `APP_POSTGRES_PORT` | `5433` | PostgreSQL port for flovyn-app |
 
-To access from a remote host (e.g., via Tailscale), set `APP_URL` in `.env`:
+### Remote Access (Tailscale, etc.)
+
+To access from a remote host, set `APP_URL` in `.env`:
 ```bash
 APP_URL=https://your-host.example.ts.net
 ```
+
+This configures:
+- **flovyn-app**: Sets `NEXT_PUBLIC_APP_URL` for base URL and OIDC issuer in tokens
+- **flovyn-server**: Configures Better Auth as OIDC provider:
+  - `AUTH__BETTER_AUTH__VALIDATION_URL` → `{APP_URL}/api/auth/validate-key`
+  - `AUTH__BETTER_AUTH__JWT__JWKS_URI` → `{APP_URL}/.well-known/jwks.json`
+  - `AUTH__BETTER_AUTH__JWT__ISSUER` → `{APP_URL}`
 
 ### Development Credentials (self-hosted)
 

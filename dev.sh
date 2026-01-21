@@ -121,12 +121,21 @@ start_server() {
 
     cd "$SERVER_DIR"
 
+    # Resolve APP_URL for OIDC provider configuration
+    local app_url="${APP_URL:-http://localhost:3000}"
+
     export CONFIG_FILE="$config_file"
     export RUST_LOG="${RUST_LOG:-info,flovyn_server=debug}"
     export WORKER_TOKEN_SECRET="${WORKER_TOKEN_SECRET:-dev-secret-key-for-testing-only}"
 
+    # Override Better Auth URLs from APP_URL (OIDC provider)
+    export AUTH__BETTER_AUTH__VALIDATION_URL="${app_url}/api/auth/validate-key"
+    export AUTH__BETTER_AUTH__JWT__JWKS_URI="${app_url}/.well-known/jwks.json"
+    export AUTH__BETTER_AUTH__JWT__ISSUER="${app_url}"
+
     echo -e "  Config: $config_file"
     echo -e "  Server: http://localhost:8000"
+    echo -e "  OIDC Provider: $app_url"
     echo ""
 
     cargo run --bin flovyn-server
