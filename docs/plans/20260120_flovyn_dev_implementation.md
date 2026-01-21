@@ -470,29 +470,30 @@ GitHub-driven workflow.
 
 ## ~~Milestone 5: Per-Worktree Docker Environment~~ → Simplified to Port Allocation
 
-**Status:** 🔄 Simplified - Docker isolation replaced with port allocation
+**Status:** 🔄 Simplified - Full isolation via port allocation (no per-worktree Docker images)
 
-**Reason:** With Milestone 0.7 (configurable ports in `dev/.env`), we can run multiple instances by simply allocating different ports per worktree. No need for per-worktree Docker images.
+**Reason:** With Milestone 0.7 (configurable ports in `dev/.env`), we can run multiple fully isolated instances by allocating different ports for ALL services per worktree.
 
 **New approach:**
-- Infrastructure (postgres, nats, jaeger) is shared via `mise run start` from main `dev/`
-- Each worktree gets its own `dev/.env` with auto-allocated unique ports
-- Services run directly (`cargo run`, `pnpm dev`) using the worktree's ports
-- All scripts (`dev.sh`, mise tasks) already read ports from `.env`
+- Each worktree gets its own `dev/.env` with unique ports for ALL services
+- Each worktree runs its own infrastructure (postgres, nats, jaeger) on unique ports
+- Services run via `mise run start`, `mise run server`, `mise run app` from each worktree
+- Complete isolation - no shared infrastructure between worktrees
 
 ### TODO (Simplified)
 
 - [ ] **Port allocation on worktree create**
   - [ ] Track allocated ports in `~/.flovyn/ports.json`
-  - [ ] Allocate unique ports for each worktree (offset from base: 3000, 8000, 9090)
-  - [ ] Generate `worktrees/{feature}/dev/.env` with allocated ports
+  - [ ] Allocate unique ports for ALL services (offset from base ports)
+  - [ ] Generate `worktrees/{feature}/dev/.env` with all allocated ports
   - [ ] Release ports on worktree delete
 
 - [ ] **Implement `flovyn-dev env <feature>`**
-  - [ ] Show allocated ports and URLs for the feature
-  - [ ] Example: `App: http://localhost:3001, Server: http://localhost:8001`
+  - [ ] Show all allocated ports and URLs for the feature
 
 ### Port Allocation Schema
+
+All services get unique ports per worktree:
 
 ```json
 {
@@ -501,13 +502,27 @@ GitHub-driven workflow.
       "offset": 1,
       "APP_PORT": 3001,
       "SERVER_HTTP_PORT": 8001,
-      "SERVER_GRPC_PORT": 9091
+      "SERVER_GRPC_PORT": 9091,
+      "SERVER_POSTGRES_PORT": 5436,
+      "APP_POSTGRES_PORT": 5434,
+      "NATS_PORT": 4223,
+      "NATS_MONITOR_PORT": 8223,
+      "JAEGER_UI_PORT": 16687,
+      "JAEGER_OTLP_GRPC_PORT": 4318,
+      "JAEGER_OTLP_HTTP_PORT": 4319
     },
     "schedules": {
       "offset": 2,
       "APP_PORT": 3002,
       "SERVER_HTTP_PORT": 8002,
-      "SERVER_GRPC_PORT": 9092
+      "SERVER_GRPC_PORT": 9092,
+      "SERVER_POSTGRES_PORT": 5437,
+      "APP_POSTGRES_PORT": 5435,
+      "NATS_PORT": 4224,
+      "NATS_MONITOR_PORT": 8224,
+      "JAEGER_UI_PORT": 16688,
+      "JAEGER_OTLP_GRPC_PORT": 4319,
+      "JAEGER_OTLP_HTTP_PORT": 4320
     }
   },
   "next_offset": 3
@@ -517,21 +532,19 @@ GitHub-driven workflow.
 ### Running Multiple Features in Parallel
 
 ```bash
-# Start shared infrastructure (from main dev/)
-cd /home/ubuntu/workspaces/flovyn/dev
-mise run start
-
-# Feature 1: webhook-retry (ports auto-allocated: 3001, 8001, 9091)
+# Feature 1: webhook-retry (all ports offset by 1)
 cd worktrees/webhook-retry/dev
-mise run server &  # Uses SERVER_HTTP_PORT=8001
-mise run app &     # Uses APP_PORT=3001
+mise run start   # Starts postgres:5436, nats:4223, jaeger:16687
+mise run server  # HTTP:8001, gRPC:9091
+mise run app     # App:3001
 
-# Feature 2: schedules (ports auto-allocated: 3002, 8002, 9092)
+# Feature 2: schedules (all ports offset by 2)
 cd worktrees/schedules/dev
-mise run server &  # Uses SERVER_HTTP_PORT=8002
-mise run app &     # Uses APP_PORT=3002
+mise run start   # Starts postgres:5437, nats:4224, jaeger:16688
+mise run server  # HTTP:8002, gRPC:9092
+mise run app     # App:3002
 
-# Both running simultaneously on different ports
+# Fully isolated - each has its own databases, message broker, tracing
 ```
 
 ---
