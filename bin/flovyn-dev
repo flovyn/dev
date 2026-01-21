@@ -1879,19 +1879,30 @@ def cmd_move(args: argparse.Namespace) -> int:
         print()
         print(colored(f"Moved '{feature}' from {current_phase} to {new_phase}", Colors.GREEN))
 
-    # Send phase prompt to existing Claude session
+    # Start Claude and send phase prompt
     if args.send_prompt and new_phase in ("Planning", "In Progress"):
         if tmux_session_exists(feature):
             print()
             if new_phase == "Planning":
-                print(colored("Sending Planning phase prompt...", Colors.YELLOW))
+                print(colored("Starting Claude for Planning phase...", Colors.YELLOW))
                 prompt = get_planning_prompt(feature)
             else:  # In Progress
-                print(colored("Sending Implementation phase prompt...", Colors.YELLOW))
+                print(colored("Starting Claude for Implementation phase...", Colors.YELLOW))
                 prompt = get_implementation_prompt(feature)
 
+            # Start Claude
+            print(f"  Launching Claude Code...", end=" ")
+            tmux_send_keys(feature, "claude")
+            print(colored("✓", Colors.GREEN))
+
+            # Wait for Claude to initialize
+            time.sleep(2)
+
+            # Send phase prompt
+            print(f"  Sending phase prompt...", end=" ")
             tmux_send_keys(feature, prompt)
-            print(colored("✓ Prompt sent", Colors.GREEN))
+            print(colored("✓", Colors.GREEN))
+
             print()
             print(f"Attach with: flovyn-dev attach {feature} --no-resume")
         else:
