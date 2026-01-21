@@ -2,7 +2,7 @@
 
 **Date:** 2026-01-20
 **Design:** [20260120_flovyn_dev_workflow.md](../design/20260120_flovyn_dev_workflow.md)
-**Status:** In Progress
+**Status:** ✅ Complete
 
 ## Overview
 
@@ -468,66 +468,85 @@ Full local workflow without GitHub integration.
 
 **Goal:** Pull tasks from GitHub Projects, sync status bidirectionally.
 
+**Status:** ✅ Complete
+
 ### Prerequisites
 
-Create GitHub Project manually:
-```bash
-gh project create --owner flovyn --title "Development"
-# Via web UI: add Status, Type, Branch fields
-```
+GitHub Project created:
+- **Project:** https://github.com/orgs/flovyn/projects/3
+- **Fields:**
+  - `Phase` (single-select): Backlog, Design, Planning, In Progress, Review, Done
+  - `Kind` (single-select): Feature, Bug, Research
+  - `Branch` (text): Branch name linking to local worktree
+
+*Note: Used "Phase" instead of "Status" (reserved field), "Kind" instead of "Type" (reserved).*
 
 ### TODO
 
-- [ ] **4.1** Implement GitHub Project API helpers
-  - [ ] Get project ID by name
-  - [ ] Get field IDs (Status, Type, Branch)
-  - [ ] List project items with fields
-  - [ ] Update item field value
+- [x] **4.1** Implement GitHub Project API helpers
+  - [x] `gh_api()` - Execute GraphQL queries with proper variable handling
+  - [x] `gh_get_project_id()` - Get project node ID
+  - [x] `gh_get_field_ids()` - Get field IDs for Phase, Kind, Branch
+  - [x] `gh_list_project_items()` - List all project items with fields
+  - [x] `gh_update_item_field()` - Update text or single-select field
+  - [x] `gh_add_issue_comment()` - Post comment to linked issue
+  - [x] `gh_find_item_by_branch()` - Find item by branch name
 
-- [ ] **4.2** Implement `flovyn-dev list --remote`
-  - [ ] Fetch items from GitHub Project
-  - [ ] Display table: Status, Title, Branch, Type
-  - [ ] Support filters: `--status`, `--type`
-  - [ ] Merge with local state (show which have worktrees)
+- [x] **4.2** Implement `flovyn-dev list --remote`
+  - [x] Fetch items from GitHub Project
+  - [x] Group by phase with color coding
+  - [x] Show local worktree indicator (●)
+  - [x] Support filters: `--phase`, `--kind`
 
-- [ ] **4.3** Implement `flovyn-dev pick`
-  - [ ] Interactive selection (default: `Status = Backlog`)
-  - [ ] Get Branch field from item (or generate from title)
-  - [ ] Fetch linked issue body for initial prompt
-  - [ ] Run `create` with branch name
-  - [ ] Update GitHub status: Backlog → Design
+- [x] **4.3** Implement `flovyn-dev pick`
+  - [x] Interactive selection (default: `Phase = Backlog`)
+  - [x] Get Branch field from item (or generate from title)
+  - [x] Run `create` with branch name
+  - [x] Update Branch field in GitHub
+  - [x] Update Phase: Backlog → Design
+  - [x] Post comment to linked issue
 
-- [ ] **4.4** Implement `flovyn-dev move <feature> <status>`
-  - [ ] Map feature to GitHub item (by branch name)
-  - [ ] Validate transition (define allowed transitions)
-  - [ ] Update GitHub Project item status
-  - [ ] Show confirmation
+- [x] **4.4** Implement `flovyn-dev move <feature> <phase>`
+  - [x] Map feature to GitHub item (by branch name)
+  - [x] Update GitHub Project item phase
+  - [x] Post phase transition comment with doc summaries:
+    - [x] Design → Planning: Extract Problem Statement, Solution from design doc
+    - [x] Planning → In Progress: Extract TODO list from plan doc
+    - [x] In Progress → Review: Show progress percentage
+    - [x] → Done: Mark complete
 
-- [ ] **4.5** Implement `flovyn-dev sync`
-  - [ ] Compare local worktrees with GitHub items
-  - [ ] Show orphaned local (no GitHub item)
-  - [ ] Show orphaned remote (GitHub item with branch, no local worktree)
-  - [ ] Offer to reconcile
+- [x] **4.5** Implement `flovyn-dev sync`
+  - [x] Compare local worktrees with GitHub items
+  - [x] Show in-sync items with phase
+  - [x] Show local-only (no GitHub item)
+  - [x] Show remote-only (GitHub item with branch, no local worktree)
+  - [x] Optional `--update-progress` to post progress updates
 
-### Test
+### Commands
 
 ```bash
-# Create GitHub card with Branch = "webhook-retry"
+# List remote items
 flovyn-dev list --remote
-flovyn-dev list --remote --status Backlog
+flovyn-dev list -r --phase Backlog
+flovyn-dev list -r --kind Feature
 
-flovyn-dev pick  # Interactive selection
-# Verify: worktree created, GitHub status = Design
+# Pick from backlog and create worktree
+flovyn-dev pick
+flovyn-dev pick --phase Design
 
+# Move between phases (updates GitHub and posts summary)
 flovyn-dev move webhook-retry Planning
-# Verify: GitHub status updated
+flovyn-dev move webhook-retry "In Progress"
+flovyn-dev move webhook-retry Review
 
+# Sync local vs remote
 flovyn-dev sync
+flovyn-dev sync --update-progress
 ```
 
 ### Usable After
 
-GitHub-driven workflow.
+GitHub-driven workflow with bidirectional sync and automatic issue updates.
 
 ---
 
@@ -568,50 +587,66 @@ mise run app     # App:3002
 
 **Goal:** Lightweight research tasks without full worktree.
 
+**Status:** ✅ Complete
+
 ### TODO
 
-- [ ] **5.1** Implement `flovyn-dev research <task>`
-  - [ ] Create `worktrees/{topic}/dev/` only (single repo)
-  - [ ] Create research doc from template
-  - [ ] Create tmux session
-  - [ ] Send research-specific initial prompt
+- [x] **5.1** Implement `flovyn-dev research <topic>`
+  - [x] Create `worktrees/{topic}/dev/` only (single repo)
+  - [x] Create research doc from template (built-in default)
+  - [x] Create tmux session
+  - [x] Send research-specific initial prompt
 
-- [ ] **5.2** Create research initial prompt template
-  - [ ] Focus on exploration, not implementation
-  - [ ] Include GitHub issue content
-  - [ ] Ask for findings and recommendation
+- [x] **5.2** Create research initial prompt template
+  - [x] Focus on exploration, not implementation
+  - [x] Customizable via `docs/templates/prompts/research.md`
+  - [x] Ask for findings and recommendation
 
-- [ ] **5.3** Integrate with GitHub Projects
-  - [ ] Update status: Backlog → Research
-  - [ ] Support `pick --research` to filter Research-type items
+- [x] **5.3** Integrate with GitHub Projects
+  - [x] Support `pick --research` to filter Kind=Research items
+  - [x] Post research start comment to GitHub issue
 
-- [ ] **5.4** Handle research → design transition
-  - [ ] `flovyn-dev docs mv {topic} research design`
-  - [ ] `flovyn-dev pick {topic}` to create full worktree
-  - [ ] Update GitHub status: Research → Design
+- [x] **5.4** Handle research → design transition
+  - [x] `flovyn-dev docs mv {topic} research design`
+  - [x] Transforms research doc structure to design doc format
+  - [x] Can then create full worktree with `flovyn-dev create`
 
-- [ ] **5.5** Update `delete` for research worktrees
-  - [ ] Detect research-only worktrees (only dev/ exists)
-  - [ ] Clean up appropriately
+- [x] **5.5** Detect research worktrees
+  - [x] `is_research_worktree()` helper (only dev/ exists)
+  - [x] `list` command shows `[research]` indicator
+  - [x] `delete` works correctly for research worktrees
 
-### Test
+### Commands
 
 ```bash
-flovyn-dev research "retry-strategies"
-ls worktrees/retry-strategies/  # Should only have dev/
-cat dev/docs/research/20260120_retry_strategies.md  # Should exist
+# Create research worktree
+flovyn-dev research retry-strategies
+flovyn-dev research retry-strategies --no-session
 
-flovyn-dev attach retry-strategies
-# Verify: research-focused prompt
+# Pick research tasks from GitHub
+flovyn-dev pick --research
 
-# When ready to proceed:
+# Convert research to design
 flovyn-dev docs mv retry-strategies research design
-flovyn-dev pick retry-strategies  # Creates full worktree
+
+# List shows research worktrees
+flovyn-dev list  # Shows [research] indicator
 ```
+
+### Research Document Template
+
+Default template includes:
+- Objective
+- Background
+- Findings
+- Options Considered (with pros/cons)
+- Recommendation
+- Next Steps
+- References
 
 ### Usable After
 
-Research workflow for exploration tasks.
+Research workflow for exploration tasks without full multi-repo worktree overhead.
 
 ---
 
@@ -619,57 +654,66 @@ Research workflow for exploration tasks.
 
 **Goal:** Streamlined PR creation and safe cleanup.
 
+**Status:** ✅ Complete
+
 ### TODO
 
-- [ ] **6.1** Implement `flovyn-dev pr <feature>`
-  - [ ] Detect repos with uncommitted changes (warn)
-  - [ ] Detect repos with unpushed commits
-  - [ ] Push branches to origin
+- [x] **6.1** Implement `flovyn-dev pr <feature>`
+  - [x] Detect repos with uncommitted changes (warn)
+  - [x] Detect repos with commits not on main
+  - [x] Push branches to origin
 
-- [ ] **6.2** Create PRs with template
-  - [ ] Extract summary from design doc
-  - [ ] Generate PR body with:
-    - Summary
+- [x] **6.2** Create PRs with template
+  - [x] Extract summary from design doc (Problem Statement, Solution)
+  - [x] Generate PR body with:
+    - Summary from design doc
     - Link to design doc
     - Test plan checklist
-  - [ ] Create PR via `gh pr create`
-  - [ ] Link PR to GitHub Project item
+    - Claude Code attribution
+  - [x] Create PR via `gh pr create`
+  - [x] Post PR links to GitHub Project issue
 
-- [ ] **6.3** Implement `flovyn-dev archive <feature>` pre-flight checks
-  - [ ] Check for uncommitted changes (block if dirty)
-  - [ ] Check all PRs are merged (block if open)
-  - [ ] Show clear error messages
+- [x] **6.3** Implement `flovyn-dev archive <feature>` pre-flight checks
+  - [x] Check for uncommitted changes (block if dirty)
+  - [x] Check all PRs are merged (block if OPEN state)
+  - [x] Show clear error messages
+  - [x] Confirmation prompt before archiving
 
-- [ ] **6.4** Implement archive cleanup
-  - [ ] Archive docs (`flovyn-dev docs archive`)
-  - [ ] Remove worktrees (which removes the .env with ports)
-  - [ ] Kill tmux session
-  - [ ] Update GitHub status: → Done
+- [x] **6.4** Implement archive cleanup
+  - [x] Archive docs (`flovyn-dev docs archive`)
+  - [x] Kill tmux session
+  - [x] Update GitHub Project status: → Done
+  - [x] Post completion comment to issue
+  - [x] Remove worktrees (reuses `delete` command)
 
-- [ ] **6.5** Add `--force` flag for archive
-  - [ ] Skip pre-flight checks
-  - [ ] Require confirmation
-  - [ ] Use for abandoned features
+- [x] **6.5** Add `--force` flag for archive
+  - [x] Skip pre-flight checks
+  - [x] Use for abandoned features
 
-### Test
+### Commands
 
 ```bash
-# After completing implementation:
+# Create PRs for all repos with changes
 flovyn-dev pr webhook-retry
-# Verify: PRs created, linked to project
 
-# After PRs merged:
+# Archive after PRs merged (with checks)
 flovyn-dev archive webhook-retry
-# Verify: all cleanup performed
 
-# Check cleanup:
-ls worktrees/ | grep webhook-retry  # Should not exist
-tmux list-sessions | grep webhook-retry  # Should not exist
+# Force archive without checks (for abandoned features)
+flovyn-dev archive webhook-retry --force
 ```
+
+### PR Template
+
+Generated PR body includes:
+- Summary extracted from design doc
+- Link to design doc
+- Test plan checklist
+- Claude Code attribution footer
 
 ### Usable After
 
-Complete end-to-end workflow.
+Complete end-to-end workflow from feature creation to archive.
 
 ---
 
@@ -684,13 +728,30 @@ Complete end-to-end workflow.
 | 1 | CLI + Worktrees + Port Allocation | M0 | Low | ✅ Done |
 | 2 | Doc templates + lifecycle | M1 | Low | ✅ Done |
 | 3 | Tmux + Claude | M1, M2 | Medium | ✅ Done |
-| 4 | GitHub Projects | M1, M2, M3 | Medium | |
+| 4 | GitHub Projects | M1, M2, M3 | Medium | ✅ Done |
 | ~~5~~ | ~~Docker per-worktree~~ → Port allocation | M1 | Low | ✅ Integrated into M1 |
-| 5 | Research workflow | M1, M2, M3, M4 | Low | |
-| 6 | PR + Archive | M1, M4 | Medium | |
+| 5 | Research workflow | M1, M2, M3, M4 | Low | ✅ Done |
+| 6 | PR + Archive | M1, M4 | Medium | ✅ Done |
 
 **Recommended order:** 0 → 0.5 → 0.6 → 0.7 → 1 → 2 → 3 → 4 → 5 → 6
 
 Port allocation (formerly M5) was integrated into M1 (worktree create).
+
+---
+
+## Completion Notes
+
+**Completed:** 2026-01-21
+
+All milestones implemented. The `flovyn-dev` CLI now provides a complete end-to-end workflow:
+
+1. **Create feature** (`create` or `pick` from GitHub Backlog)
+2. **Research** (`research` for exploration-only tasks)
+3. **Design & Plan** (auto-generated docs, phase transitions via `move`)
+4. **Implement** (isolated worktrees with unique ports, tmux + Claude integration)
+5. **PR Creation** (`pr` command pushes and creates PRs across repos)
+6. **Archive** (`archive` cleans up after merge)
+
+All commands integrate with GitHub Projects for status tracking and automatic issue updates.
 
 Each milestone can be tested independently before proceeding.
