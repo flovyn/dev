@@ -101,6 +101,43 @@ All docs in one place, ready for new workflow.
 
 ---
 
+## Milestone 0.5: Standardize on Mise
+
+**Goal:** Use mise for all dev tasks across all repos.
+
+**Status:** ✅ Complete
+
+### TODO
+
+- [x] **0.5.1** Rename `dev/mise.toml` to `.mise.toml`
+- [x] **0.5.2** Create `flovyn-server/.mise.toml`
+  - [x] Add tools: `rust = "stable"`
+  - [x] Add tasks: build, test, test:integration, test:loop, e2e, lint, db:connect, etc.
+- [x] **0.5.3** Create `sdk-rust/.mise.toml`
+  - [x] Add tools: `rust = "stable"`
+  - [x] Add tasks: build, test, test:unit, test:tck, test:e2e, test:model, lint, examples
+- [x] **0.5.4** Update `sdk-kotlin/.mise.toml`
+  - [x] Add tasks: build, test, test:e2e, examples
+- [x] **0.5.5** Update all CLAUDE.md files
+  - [x] `flovyn-server/CLAUDE.md` - reference mise commands
+  - [x] `flovyn-app/CLAUDE.md` - reference mise commands
+  - [x] `sdk-rust/CLAUDE.md` - reference mise commands, update doc paths
+  - [x] `sdk-kotlin/CLAUDE.md` - reference mise commands
+- [x] **0.5.6** Commit and push all repos
+
+### Result
+
+| Repo | Config | Tools | Tasks |
+|------|--------|-------|-------|
+| `dev/` | `.mise.toml` | - | start, stop, server, app, db, etc. |
+| `flovyn-server/` | `.mise.toml` | rust=stable | build, test, e2e, lint, db:connect, etc. |
+| `flovyn-app/` | `.mise.toml` | node=22, pnpm | dev, build, lint, e2e, etc. |
+| `sdk-rust/` | `.mise.toml` | rust=stable | build, test, lint, examples, etc. |
+| `sdk-kotlin/` | `.mise.toml` | java=temurin-17 | build, test, examples, etc. |
+| `sdk-python/` | `.mise.toml` | - | test, lint, format, typecheck |
+
+---
+
 ## Milestone 1: CLI Foundation + Worktree Management
 
 **Goal:** Replace `worktree.py` with `flovyn-dev` in `dev/bin/`, preserving existing functionality.
