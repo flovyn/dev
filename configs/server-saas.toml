@@ -39,7 +39,6 @@ timeout_secs = 5
 
 [auth.better_auth.jwt]
 jwks_uri = "http://localhost:3000/.well-known/jwks.json"
-issuer = "http://localhost:3000"
 audience = "flovyn-server"
 skip_verification = false
 
