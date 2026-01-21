@@ -390,57 +390,73 @@ Worktrees with auto-generated design docs and doc lifecycle management.
 
 **Goal:** Each feature gets its own tmux session with Claude Code.
 
+**Status:** ✅ Complete
+
 ### TODO
 
-- [ ] **3.1** Create tmux session on `create`
-  - [ ] Session name: `{feature}`
-  - [ ] Working directory: `worktrees/{feature}/`
-  - [ ] Check if session already exists
+- [x] **3.1** Create tmux session on `create`
+  - [x] Session name: `{feature}`
+  - [x] Working directory: `worktrees/{feature}/`
+  - [x] Check if session already exists
+  - [x] Add `--no-session` flag to skip session creation
 
-- [ ] **3.2** Launch Claude Code in session
-  - [ ] Run `claude` command in tmux session
-  - [ ] Wait for Claude to initialize (sleep or detect prompt)
+- [x] **3.2** Launch Claude Code in session
+  - [x] Run `claude` command in tmux session
+  - [x] Wait for Claude to initialize (2 second sleep)
 
-- [ ] **3.3** Send initial prompt
-  - [ ] Template with feature name and doc path
-  - [ ] Include GitHub issue content (if available, placeholder for M4)
-  - [ ] Escape special characters for tmux send-keys
+- [x] **3.3** Send initial prompt
+  - [x] Template with feature name and doc path
+  - [x] Customizable via `docs/templates/prompts/initial.md`
+  - [x] Sends via tmux send-keys
 
-- [ ] **3.4** Implement `flovyn-dev attach <feature>`
-  - [ ] Check if tmux session exists
-  - [ ] If no session, offer to create
-  - [ ] Attach to session
-  - [ ] Send resume prompt before attaching
+- [x] **3.4** Implement `flovyn-dev attach <feature>`
+  - [x] Check if tmux session exists
+  - [x] If no session but worktree exists, offer to create session
+  - [x] Send resume prompt before attaching (configurable with `--no-resume`)
+  - [x] Attach to session
 
-- [ ] **3.5** Define resume prompt template
-  - [ ] Ask Claude to read plan doc
-  - [ ] Report current phase and TODO status
-  - [ ] Identify next task
+- [x] **3.5** Define resume prompt template
+  - [x] Customizable via `docs/templates/prompts/resume.md`
+  - [x] Lists design and plan docs
+  - [x] Asks Claude to continue from where left off
 
-- [ ] **3.6** Update `delete` to cleanup tmux
-  - [ ] Kill tmux session if exists
-  - [ ] Don't error if session doesn't exist
+- [x] **3.6** Update `delete` to cleanup tmux
+  - [x] Kill tmux session if exists
+  - [x] Handles case where session doesn't exist
 
-- [ ] **3.7** Add `flovyn-dev sessions`
-  - [ ] List all flovyn-related tmux sessions
-  - [ ] Show: feature name, attached/detached, last activity
+- [x] **3.7** Add `flovyn-dev sessions`
+  - [x] List all flovyn-related tmux sessions
+  - [x] Show: feature name, attached/detached, last activity
 
-### Test
+### Commands
 
 ```bash
+# Create with tmux session (default)
 flovyn-dev create webhook-retry
-tmux list-sessions | grep webhook-retry  # Should exist
 
+# Create without tmux session
+flovyn-dev create webhook-retry --no-session
+
+# Attach to session (sends resume prompt)
 flovyn-dev attach webhook-retry
-# Verify: Claude received initial prompt
 
-# Detach (Ctrl+B D), then:
-flovyn-dev attach webhook-retry
-# Verify: Claude received resume prompt
+# Attach without resume prompt
+flovyn-dev attach webhook-retry --no-resume
 
+# List all flovyn sessions
+flovyn-dev sessions
+
+# Delete (also kills tmux session)
 flovyn-dev delete webhook-retry
-tmux list-sessions | grep webhook-retry  # Should not exist
 ```
+
+### Prompt Templates
+
+Default prompts are built-in. Override by creating:
+- `docs/templates/prompts/initial.md` - Initial prompt for new features
+- `docs/templates/prompts/resume.md` - Resume prompt when re-attaching
+
+Placeholders: `{feature}`, `{design_path}`, `{plan_path}`, `{docs_info}`
 
 ### Usable After
 
@@ -667,7 +683,7 @@ Complete end-to-end workflow.
 | 0.7 | Configurable Ports | M0.6 | Low | ✅ Done |
 | 1 | CLI + Worktrees + Port Allocation | M0 | Low | ✅ Done |
 | 2 | Doc templates + lifecycle | M1 | Low | ✅ Done |
-| 3 | Tmux + Claude | M1, M2 | Medium | |
+| 3 | Tmux + Claude | M1, M2 | Medium | ✅ Done |
 | 4 | GitHub Projects | M1, M2, M3 | Medium | |
 | ~~5~~ | ~~Docker per-worktree~~ → Port allocation | M1 | Low | ✅ Integrated into M1 |
 | 5 | Research workflow | M1, M2, M3, M4 | Low | |

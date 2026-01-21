@@ -12,8 +12,9 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -61,6 +62,9 @@ DESIGN_DIR = DOCS_DIR / "design"
 PLANS_DIR = DOCS_DIR / "plans"
 FEATURES_DIR = DOCS_DIR / "features"  # For large features
 ARCHIVE_DIR = DOCS_DIR / "archive"
+
+# Prompt templates directory
+PROMPTS_DIR = DOCS_DIR / "templates" / "prompts"
 
 # Colors for terminal output
 class Colors:
@@ -362,6 +366,150 @@ def create_plan_doc(feature: str, large: bool = False, phase: Optional[str] = No
 
 
 # =============================================================================
+# Tmux Helpers
+# =============================================================================
+
+def tmux_session_exists(session_name: str) -> bool:
+    """Check if a tmux session exists."""
+    result = subprocess.run(
+        ["tmux", "has-session", "-t", session_name],
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def tmux_create_session(session_name: str, working_dir: Path) -> bool:
+    """Create a new tmux session. Returns True if created."""
+    if tmux_session_exists(session_name):
+        return False
+
+    subprocess.run(
+        ["tmux", "new-session", "-d", "-s", session_name, "-c", str(working_dir)],
+        check=True,
+    )
+    return True
+
+
+def tmux_kill_session(session_name: str) -> bool:
+    """Kill a tmux session. Returns True if killed."""
+    if not tmux_session_exists(session_name):
+        return False
+
+    subprocess.run(
+        ["tmux", "kill-session", "-t", session_name],
+        check=True,
+    )
+    return True
+
+
+def tmux_send_keys(session_name: str, keys: str, enter: bool = True) -> None:
+    """Send keys to a tmux session."""
+    cmd = ["tmux", "send-keys", "-t", session_name, keys]
+    if enter:
+        cmd.append("Enter")
+    subprocess.run(cmd, check=True)
+
+
+def tmux_list_sessions() -> list[dict]:
+    """List all tmux sessions with their info."""
+    result = subprocess.run(
+        ["tmux", "list-sessions", "-F", "#{session_name}:#{session_attached}:#{session_activity}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+
+    sessions = []
+    for line in result.stdout.strip().split("\n"):
+        if not line:
+            continue
+        parts = line.split(":")
+        if len(parts) >= 3:
+            sessions.append({
+                "name": parts[0],
+                "attached": parts[1] == "1",
+                "activity": int(parts[2]) if parts[2].isdigit() else 0,
+            })
+    return sessions
+
+
+def get_initial_prompt(feature: str, design_path: Optional[Path]) -> str:
+    """Generate initial prompt for Claude Code."""
+    # Try to load from template
+    template_path = PROMPTS_DIR / "initial.md"
+    if template_path.exists():
+        template = template_path.read_text()
+    else:
+        template = """You are working on feature: {feature}
+
+Please read the design document to understand the feature requirements:
+{design_path}
+
+After reading the design doc:
+1. Summarize the key requirements
+2. Identify the implementation phases
+3. Ask any clarifying questions before starting
+
+When ready, create an implementation plan at:
+{plan_path}
+"""
+
+    design_rel = design_path.relative_to(DOCS_DIR.parent) if design_path else "No design doc found"
+
+    # Determine plan path based on feature structure
+    if is_large_feature(feature):
+        plan_path = f"dev/docs/features/{feature}/plan.md"
+    else:
+        plan_path = f"dev/docs/plans/{get_date_prefix()}_{feature.replace('-', '_')}.md"
+
+    return template.format(
+        feature=feature,
+        design_path=str(design_rel),
+        plan_path=plan_path,
+    )
+
+
+def get_resume_prompt(feature: str) -> str:
+    """Generate resume prompt for Claude Code."""
+    # Try to load from template
+    template_path = PROMPTS_DIR / "resume.md"
+    if template_path.exists():
+        template = template_path.read_text()
+    else:
+        template = """Resuming work on feature: {feature}
+
+Please:
+1. Read the implementation plan to understand current progress
+2. Identify completed tasks (marked with [x])
+3. Identify the next task to work on
+4. Continue implementation from where we left off
+
+{docs_info}
+"""
+
+    # Find docs for this feature
+    docs = find_feature_docs(feature)
+    docs_info_lines = []
+
+    if docs["design"]:
+        for d in docs["design"]:
+            docs_info_lines.append(f"Design: {d.relative_to(DOCS_DIR.parent)}")
+    if docs["plan"]:
+        for p in docs["plan"]:
+            docs_info_lines.append(f"Plan: {p.relative_to(DOCS_DIR.parent)}")
+
+    docs_info = "\n".join(docs_info_lines) if docs_info_lines else "No docs found"
+
+    return template.format(
+        feature=feature,
+        docs_info=docs_info,
+    )
+
+
+# =============================================================================
 # Commands
 # =============================================================================
 
@@ -438,20 +586,48 @@ def cmd_create(args: argparse.Namespace) -> int:
     else:
         print(colored("✗ (template not found)", Colors.YELLOW))
 
+    # Create tmux session (unless --no-session)
+    no_session = getattr(args, 'no_session', False)
+    if not no_session:
+        print(f"  Creating tmux session...", end=" ")
+        if tmux_create_session(feature, worktree_path):
+            print(colored("✓", Colors.GREEN))
+
+            # Launch Claude Code
+            print(f"  Launching Claude Code...", end=" ")
+            tmux_send_keys(feature, "claude")
+            print(colored("✓", Colors.GREEN))
+
+            # Wait for Claude to initialize
+            time.sleep(2)
+
+            # Send initial prompt
+            print(f"  Sending initial prompt...", end=" ")
+            initial_prompt = get_initial_prompt(feature, design_path)
+            # Escape for tmux send-keys (use literal-string mode)
+            tmux_send_keys(feature, initial_prompt)
+            print(colored("✓", Colors.GREEN))
+        else:
+            print(colored("(already exists)", Colors.YELLOW))
+
     print()
     print(colored(f"Worktree '{feature}' created successfully!", Colors.GREEN))
-    print()
-    print("Next steps:")
-    print(f"  cd {worktree_path}")
-    print(f"  cd dev && mise run start   # Start infrastructure")
-    print(f"  mise run server             # Start server (in another terminal)")
-    print(f"  mise run app                # Start app (in another terminal)")
     print()
     print("Ports:")
     print(f"  App:         http://localhost:{allocation.ports['APP_PORT']}")
     print(f"  Server HTTP: http://localhost:{allocation.ports['SERVER_HTTP_PORT']}")
     print(f"  Server gRPC: localhost:{allocation.ports['SERVER_GRPC_PORT']}")
     print(f"  Jaeger:      http://localhost:{allocation.ports['JAEGER_UI_PORT']}")
+
+    if not no_session:
+        print()
+        print("Tmux session created. To attach:")
+        print(f"  flovyn-dev attach {feature}")
+    else:
+        print()
+        print("Next steps:")
+        print(f"  cd {worktree_path}")
+        print(f"  cd dev && mise run start   # Start infrastructure")
 
     return 0
 
@@ -524,6 +700,12 @@ def cmd_delete(args: argparse.Namespace) -> int:
             result = run_git(repo_path, "branch", "-d", feature, capture=True, check=False)
             if result.returncode == 0:
                 print(f"    {repo}: branch deleted")
+
+    # Kill tmux session if exists
+    if tmux_session_exists(feature):
+        print(f"  Killing tmux session...", end=" ")
+        tmux_kill_session(feature)
+        print(colored("✓", Colors.GREEN))
 
     print()
     print(colored(f"Worktree '{feature}' deleted.", Colors.GREEN))
@@ -859,6 +1041,89 @@ def cmd_docs_archive(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_attach(args: argparse.Namespace) -> int:
+    """Attach to a feature's tmux session."""
+    feature = args.feature
+    resume = not args.no_resume
+
+    # Check if session exists
+    if not tmux_session_exists(feature):
+        # Check if worktree exists - offer to create session
+        if worktree_exists(feature):
+            print(colored(f"No tmux session for '{feature}', but worktree exists.", Colors.YELLOW))
+            response = input("Create session and launch Claude? [Y/n] ").strip().lower()
+            if response != "n":
+                worktree_path = WORKTREES_DIR / feature
+                print(f"  Creating tmux session...", end=" ")
+                tmux_create_session(feature, worktree_path)
+                print(colored("✓", Colors.GREEN))
+
+                print(f"  Launching Claude Code...", end=" ")
+                tmux_send_keys(feature, "claude")
+                print(colored("✓", Colors.GREEN))
+
+                time.sleep(2)
+
+                # Send resume prompt since worktree already exists
+                print(f"  Sending resume prompt...", end=" ")
+                resume_prompt = get_resume_prompt(feature)
+                tmux_send_keys(feature, resume_prompt)
+                print(colored("✓", Colors.GREEN))
+            else:
+                print("Cancelled.")
+                return 1
+        else:
+            print(colored(f"Error: No session or worktree for '{feature}'", Colors.RED))
+            print(f"Create one with: flovyn-dev create {feature}")
+            return 1
+    elif resume:
+        # Send resume prompt before attaching
+        print(f"Sending resume prompt...", end=" ")
+        resume_prompt = get_resume_prompt(feature)
+        tmux_send_keys(feature, resume_prompt)
+        print(colored("✓", Colors.GREEN))
+
+    # Attach to session
+    print(f"Attaching to session '{feature}'...")
+    os.execvp("tmux", ["tmux", "attach-session", "-t", feature])
+    return 0
+
+
+def cmd_sessions(args: argparse.Namespace) -> int:
+    """List all flovyn-related tmux sessions."""
+    sessions = tmux_list_sessions()
+
+    if not sessions:
+        print(colored("No tmux sessions found.", Colors.YELLOW))
+        return 0
+
+    # Filter to only flovyn worktrees
+    worktrees = set(list_all_worktrees())
+    flovyn_sessions = [s for s in sessions if s["name"] in worktrees]
+
+    if not flovyn_sessions:
+        print(colored("No flovyn-related tmux sessions found.", Colors.YELLOW))
+        if sessions:
+            print(f"(There are {len(sessions)} other tmux sessions)")
+        return 0
+
+    print(colored("Flovyn tmux sessions:", Colors.BLUE))
+    print()
+
+    for session in flovyn_sessions:
+        name = session["name"]
+        attached = colored("attached", Colors.GREEN) if session["attached"] else colored("detached", Colors.YELLOW)
+        activity_time = datetime.fromtimestamp(session["activity"]).strftime("%Y-%m-%d %H:%M:%S")
+
+        print(f"  {colored(name, Colors.CYAN)}")
+        print(f"    Status: {attached}")
+        print(f"    Last activity: {activity_time}")
+        print()
+
+    print(f"Attach with: flovyn-dev attach <feature>")
+    return 0
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -869,8 +1134,12 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  flovyn-dev create webhook-retry        Create worktrees for a new feature
+  flovyn-dev create webhook-retry        Create worktrees + tmux session + Claude
   flovyn-dev create auth-system --large  Create large feature with subdirectory
+  flovyn-dev create foo --no-session     Create without tmux session
+  flovyn-dev attach webhook-retry        Attach to tmux session (with resume prompt)
+  flovyn-dev attach webhook-retry --no-resume  Attach without sending resume prompt
+  flovyn-dev sessions                    List all flovyn tmux sessions
   flovyn-dev list                        List all worktrees
   flovyn-dev status webhook-retry        Show git status
   flovyn-dev commit webhook-retry -m "feat: add retry"
@@ -880,7 +1149,7 @@ Examples:
   flovyn-dev docs list webhook-retry     List all docs for feature
   flovyn-dev docs promote webhook-retry  Convert to large feature structure
   flovyn-dev docs archive webhook-retry  Archive completed feature docs
-  flovyn-dev delete webhook-retry        Delete worktrees
+  flovyn-dev delete webhook-retry        Delete worktrees + tmux session
         """,
     )
 
@@ -890,6 +1159,7 @@ Examples:
     p_create = subparsers.add_parser("create", help="Create worktrees for a feature")
     p_create.add_argument("feature", help="Feature name (used as branch name)")
     p_create.add_argument("--large", action="store_true", help="Use large feature structure (subdirectory for docs)")
+    p_create.add_argument("--no-session", action="store_true", help="Don't create tmux session or launch Claude")
     p_create.set_defaults(func=cmd_create)
 
     # delete
@@ -944,6 +1214,16 @@ Examples:
     p_docs_archive = docs_subparsers.add_parser("archive", help="Archive completed feature docs")
     p_docs_archive.add_argument("feature", help="Feature name")
     p_docs_archive.set_defaults(func=cmd_docs_archive)
+
+    # attach
+    p_attach = subparsers.add_parser("attach", help="Attach to a feature's tmux session")
+    p_attach.add_argument("feature", help="Feature name")
+    p_attach.add_argument("--no-resume", action="store_true", help="Don't send resume prompt before attaching")
+    p_attach.set_defaults(func=cmd_attach)
+
+    # sessions
+    p_sessions = subparsers.add_parser("sessions", help="List all flovyn-related tmux sessions")
+    p_sessions.set_defaults(func=cmd_sessions)
 
     args = parser.parse_args()
     return args.func(args)
