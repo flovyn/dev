@@ -1879,36 +1879,19 @@ def cmd_move(args: argparse.Namespace) -> int:
         print()
         print(colored(f"Moved '{feature}' from {current_phase} to {new_phase}", Colors.GREEN))
 
-    # Launch new Claude in horizontal split for phase transition
+    # Send phase prompt to existing Claude session
     if args.send_prompt and new_phase in ("Planning", "In Progress"):
         if tmux_session_exists(feature):
             print()
-            worktree_path = WORKTREES_DIR / feature
-
             if new_phase == "Planning":
-                print(colored("Creating horizontal split for Planning phase...", Colors.YELLOW))
+                print(colored("Sending Planning phase prompt...", Colors.YELLOW))
                 prompt = get_planning_prompt(feature)
             else:  # In Progress
-                print(colored("Creating horizontal split for Implementation phase...", Colors.YELLOW))
+                print(colored("Sending Implementation phase prompt...", Colors.YELLOW))
                 prompt = get_implementation_prompt(feature)
 
-            # Create horizontal split and get new pane ID
-            pane_id = tmux_split_horizontal(feature, worktree_path)
-            print(f"  New pane: {pane_id}")
-
-            # Launch Claude in the new pane
-            print(f"  Launching Claude Code...", end=" ")
-            tmux_send_keys(feature, "claude", pane=pane_id)
-            print(colored("✓", Colors.GREEN))
-
-            # Wait for Claude to initialize
-            time.sleep(2)
-
-            # Send phase prompt to new pane
-            print(f"  Sending phase prompt...", end=" ")
-            tmux_send_keys(feature, prompt, pane=pane_id)
-            print(colored("✓", Colors.GREEN))
-
+            tmux_send_keys(feature, prompt)
+            print(colored("✓ Prompt sent", Colors.GREEN))
             print()
             print(f"Attach with: flovyn-dev attach {feature} --no-resume")
         else:
