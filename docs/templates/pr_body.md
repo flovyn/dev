@@ -1,3 +1,4 @@
+$issue_reference
 ## Summary
 
 $summary

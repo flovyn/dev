@@ -95,7 +95,7 @@ gh project create --owner flovyn --title "Development" --format json
 
 **Custom fields to add:**
 - `Branch` (Text) - Feature branch name used for worktrees. Required for Design+, optional for Research.
-- `Type` (Single select) - `Feature` | `Research` | `Bug`
+- `Kind` (Single select) - `Feature` | `Research` | `Bug` (Note: "Type" is reserved by GitHub for issue types)
 - `Repos` (Text) - Which repos are affected (optional, can be in design doc instead)
 
 #### Project Structure
@@ -275,7 +275,7 @@ For exploring feasibility without committing to a full feature. Creates a lightw
 $ flovyn-dev research "Retry strategies"
 
 Task: Retry strategies
-Type: Research
+Kind: Research
 Current status: Backlog
 
 Setting up...
