@@ -138,6 +138,36 @@ All docs in one place, ready for new workflow.
 
 ---
 
+## Milestone 0.6: Centralized APP_URL Configuration
+
+**Goal:** Configure flovyn-app base URL centrally from dev repo for remote access (e.g., Tailscale).
+
+**Status:** ✅ Complete
+
+### TODO
+
+- [x] **0.6.1** Add `APP_URL` to `dev/.env`
+  - [x] Default: `http://localhost:3000`
+  - [x] Used as OIDC issuer in flovyn-app tokens
+- [x] **0.6.2** Update `dev/dev.sh`
+  - [x] `start_app()` exports `NEXT_PUBLIC_APP_URL` from `APP_URL`
+  - [x] `print_services()` shows configured `APP_URL`
+- [x] **0.6.3** Document in `dev/CLAUDE.md`
+  - [x] Add Key Environment Variables table
+  - [x] Include example for Tailscale access
+
+### Usage
+
+```bash
+# In dev/.env
+APP_URL=https://your-host.ts.net
+
+# Start app with custom URL
+mise run app  # Uses APP_URL from .env
+```
+
+---
+
 ## Milestone 1: CLI Foundation + Worktree Management
 
 **Goal:** Replace `worktree.py` with `flovyn-dev` in `dev/bin/`, preserving existing functionality.
