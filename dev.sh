@@ -54,7 +54,7 @@ print_services() {
     echo -e "  Jaeger UI:           http://localhost:${JAEGER_UI_PORT:-16686}"
 
     echo -e "\n${GREEN}Application URLs:${NC}"
-    echo -e "  Flovyn App:          http://localhost:3000"
+    echo -e "  Flovyn App:          ${APP_URL:-http://localhost:3000}"
     echo -e "  Flovyn Server HTTP:  http://localhost:8000"
     echo -e "  Flovyn Server gRPC:  localhost:9090"
     echo -e "  API Docs:            http://localhost:8000/api/docs"
@@ -139,9 +139,10 @@ start_app() {
 
     export DATABASE_URL="postgresql://flovyn-app:flovyn-app@localhost:${APP_POSTGRES_PORT:-5433}/flovyn-app"
     export BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-dev-secret-key-for-testing-only}"
+    export NEXT_PUBLIC_APP_URL="${APP_URL:-http://localhost:3000}"
 
     echo -e "  Database: $DATABASE_URL"
-    echo -e "  App URL:  http://localhost:3000"
+    echo -e "  App URL:  $NEXT_PUBLIC_APP_URL"
     echo ""
 
     pnpm --filter web dev

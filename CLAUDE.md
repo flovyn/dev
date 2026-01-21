@@ -65,7 +65,7 @@ mise run open-docs            # Open API docs
 
 | Service | URL |
 |---------|-----|
-| Flovyn App | http://localhost:3000 |
+| Flovyn App | http://localhost:3000 (or `APP_URL` from .env) |
 | Flovyn Server HTTP | http://localhost:8000 |
 | Flovyn Server gRPC | localhost:9090 |
 | API Docs (Swagger) | http://localhost:8000/api/docs |
@@ -75,7 +75,21 @@ mise run open-docs            # Open API docs
 
 - `configs/server-self-hosted.toml`: Self-hosted server config with pre-configured dev org
 - `configs/server-saas.toml`: SaaS server config for multi-org mode
-- `.env`: Environment overrides (ports, secrets)
+- `.env`: Environment overrides (ports, secrets, APP_URL)
+
+### Key Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APP_URL` | `http://localhost:3000` | Base URL for flovyn-app (also used as OIDC issuer) |
+| `SCENARIO` | `self-hosted` | Deployment scenario |
+| `SERVER_POSTGRES_PORT` | `5435` | PostgreSQL port for flovyn-server |
+| `APP_POSTGRES_PORT` | `5433` | PostgreSQL port for flovyn-app |
+
+To access from a remote host (e.g., via Tailscale), set `APP_URL` in `.env`:
+```bash
+APP_URL=https://your-host.example.ts.net
+```
 
 ### Development Credentials (self-hosted)
 
