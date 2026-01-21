@@ -489,11 +489,20 @@ def get_design_prompt(feature: str, design_path: Optional[Path], issue_repo: Opt
 
     design_rel = f"dev/{design_path.relative_to(DOCS_DIR.parent)}" if design_path else "No design doc found"
 
+    issue_info = ""
     if issue_repo and issue_number:
         issue_url = f"https://github.com/{issue_repo}/issues/{issue_number}"
         issue_info = f"\nGitHub Issue: {issue_url}\n"
-    else:
-        issue_info = ""
+        # Fetch issue body for context
+        try:
+            issue_body = gh_get_issue_body(issue_repo, issue_number)
+            # Strip the flovyn tracking section if present
+            if FLOVYN_TRACKING_MARKER in issue_body:
+                issue_body = issue_body[:issue_body.find(FLOVYN_TRACKING_MARKER)].rstrip()
+            if issue_body:
+                issue_info += f"\n**Issue Description:**\n\n{issue_body}\n"
+        except Exception:
+            pass  # Ignore errors fetching issue body
 
     return template.substitute(
         feature=feature,
