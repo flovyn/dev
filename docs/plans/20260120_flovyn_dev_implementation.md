@@ -12,14 +12,22 @@ Incremental implementation of `flovyn-dev` CLI tool. Each milestone is independe
 
 ### Docker Images
 
-All Docker images must be prefixed with the Scaleway container registry:
+All Docker images must be prefixed with the Scaleway container registry and tagged with the branch name:
 ```
-rg.fr-par.scw.cloud/flovyn/<image-name>:<tag>
+rg.fr-par.scw.cloud/flovyn/<image-name>:<branch>
 ```
 
+**Branch-specific tags prevent conflicts** when multiple worktrees run E2E tests simultaneously.
+
 Examples:
-- `rg.fr-par.scw.cloud/flovyn/flovyn-server:latest`
-- `rg.fr-par.scw.cloud/flovyn/rust-examples-worker:latest`
+- `rg.fr-par.scw.cloud/flovyn/flovyn-server:main`
+- `rg.fr-par.scw.cloud/flovyn/flovyn-app:webhook-retry`
+- `rg.fr-par.scw.cloud/flovyn/rust-examples-worker:schedules`
+
+**Environment variables for E2E tests:**
+- `FLOVYN_SERVER_IMAGE` - Full image name with tag
+- `FLOVYN_APP_IMAGE` - Full image name with tag
+- `FLOVYN_WORKER_IMAGE` - Full image name with tag
 
 ---
 
