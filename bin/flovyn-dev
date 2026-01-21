@@ -536,7 +536,8 @@ def get_design_prompt(feature: str, design_path: Optional[Path], issue_repo: Opt
     """Generate prompt for Design phase - focus on design doc only."""
     template = load_template(PROMPTS_DIR / "design.md")
 
-    design_rel = f"dev/{design_path.relative_to(DOCS_DIR.parent)}" if design_path else "No design doc found"
+    docs_dir = get_docs_dir()
+    design_rel = f"dev/{design_path.relative_to(docs_dir.parent)}" if design_path else "No design doc found"
 
     issue_info = ""
     if issue_repo and issue_number:
@@ -554,8 +555,9 @@ def get_planning_prompt(feature: str) -> str:
     """Generate prompt for Planning phase - create implementation plan."""
     template = load_template(PROMPTS_DIR / "planning.md")
 
+    docs_dir = get_docs_dir()
     docs = find_feature_docs(feature)
-    design_path = f"dev/{docs['design'][0].relative_to(DOCS_DIR.parent)}" if docs["design"] else "No design doc found"
+    design_path = f"dev/{docs['design'][0].relative_to(docs_dir.parent)}" if docs["design"] else "No design doc found"
 
     if is_large_feature(feature):
         plan_path = f"dev/docs/features/{feature}/plan.md"
@@ -573,8 +575,9 @@ def get_implementation_prompt(feature: str) -> str:
     """Generate prompt for Implementation phase - execute the plan."""
     template = load_template(PROMPTS_DIR / "implementation.md")
 
+    docs_dir = get_docs_dir()
     docs = find_feature_docs(feature)
-    plan_path = f"dev/{docs['plan'][0].relative_to(DOCS_DIR.parent)}" if docs["plan"] else "No plan doc found"
+    plan_path = f"dev/{docs['plan'][0].relative_to(docs_dir.parent)}" if docs["plan"] else "No plan doc found"
 
     return template.substitute(
         feature=feature,
@@ -592,16 +595,17 @@ def get_resume_prompt(feature: str) -> str:
     """Generate resume prompt for Claude Code."""
     template = load_template(PROMPTS_DIR / "resume.md")
 
+    docs_dir = get_docs_dir()
     # Find docs for this feature
     docs = find_feature_docs(feature)
     docs_info_lines = []
 
     if docs["design"]:
         for d in docs["design"]:
-            docs_info_lines.append(f"Design: {d.relative_to(DOCS_DIR.parent)}")
+            docs_info_lines.append(f"Design: {d.relative_to(docs_dir.parent)}")
     if docs["plan"]:
         for p in docs["plan"]:
-            docs_info_lines.append(f"Plan: {p.relative_to(DOCS_DIR.parent)}")
+            docs_info_lines.append(f"Plan: {p.relative_to(docs_dir.parent)}")
 
     docs_info = "\n".join(docs_info_lines) if docs_info_lines else "No docs found"
 
@@ -615,7 +619,8 @@ def get_research_prompt(topic: str, research_path: Optional[Path], issue_body: O
     """Generate initial prompt for research tasks."""
     template = load_template(PROMPTS_DIR / "research.md")
 
-    research_rel = research_path.relative_to(DOCS_DIR.parent) if research_path else "No research doc found"
+    docs_dir = get_docs_dir()
+    research_rel = research_path.relative_to(docs_dir.parent) if research_path else "No research doc found"
 
     issue_context = ""
     if issue_body:
