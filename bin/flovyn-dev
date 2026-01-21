@@ -506,6 +506,17 @@ def tmux_send_keys(session_name: str, keys: str, enter: bool = True, pane: Optio
     subprocess.run(cmd, check=True)
 
 
+def tmux_paste_text(session_name: str, text: str) -> None:
+    """Paste text into a tmux session using the paste buffer.
+
+    More reliable than send-keys for long or multi-line text.
+    """
+    # Load text into tmux buffer
+    subprocess.run(["tmux", "load-buffer", "-"], input=text.encode(), check=True)
+    # Paste buffer into session
+    subprocess.run(["tmux", "paste-buffer", "-t", session_name], check=True)
+
+
 def tmux_split_horizontal(session_name: str, working_dir: Optional[Path] = None) -> str:
     """Create a horizontal split in a tmux session. Returns the new pane ID."""
     cmd = ["tmux", "split-window", "-h", "-t", session_name, "-P", "-F", "#{pane_id}"]
@@ -1895,12 +1906,16 @@ def cmd_move(args: argparse.Namespace) -> int:
             tmux_send_keys(feature, "claude")
             print(colored("✓", Colors.GREEN))
 
-            # Wait for Claude to initialize
-            time.sleep(2)
+            # Wait for Claude to initialize (needs time to start up)
+            print(f"  Waiting for Claude to initialize...", end=" ")
+            time.sleep(4)
+            print(colored("✓", Colors.GREEN))
 
-            # Send phase prompt
+            # Send phase prompt using paste buffer (more reliable for long text)
             print(f"  Sending phase prompt...", end=" ")
-            tmux_send_keys(feature, prompt)
+            tmux_paste_text(feature, prompt)
+            # Press Enter to submit
+            tmux_send_keys(feature, "", enter=True)
             print(colored("✓", Colors.GREEN))
 
             print()
