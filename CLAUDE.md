@@ -116,7 +116,7 @@ The `.env` file includes configuration for SDK examples and workers:
 cd ../sdk-rust
 DOTENV_PATH=../dev/.env mise run example:hello
 
-# Or with Docker
+# Or with Docker (image: rg.fr-par.scw.cloud/flovyn/rust-examples-worker:latest)
 mise run docker:build
 EXAMPLE=ecommerce mise run docker:run
 ```
