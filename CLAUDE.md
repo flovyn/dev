@@ -100,6 +100,27 @@ This configures:
   - `AUTH__BETTER_AUTH__JWT__JWKS_URI` → `{APP_URL}/.well-known/jwks.json`
   - `AUTH__BETTER_AUTH__JWT__ISSUER` → `{APP_URL}`
 
+### SDK Examples / Workers
+
+The `.env` file includes configuration for SDK examples and workers:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FLOVYN_GRPC_SERVER_URL` | `http://localhost:9090` | gRPC endpoint for workers |
+| `FLOVYN_WORKER_TOKEN` | `fwt_dev_worker` | Worker authentication token |
+| `FLOVYN_ORG_ID` | `550e8400-...` | Organization ID (dev org) |
+
+**Running examples:**
+```bash
+# From sdk-rust directory
+cd ../sdk-rust
+DOTENV_PATH=../dev/.env mise run example:hello
+
+# Or with Docker
+mise run docker:build
+EXAMPLE=ecommerce mise run docker:run
+```
+
 ### Development Credentials (self-hosted)
 
 | Type | Key | Org |
