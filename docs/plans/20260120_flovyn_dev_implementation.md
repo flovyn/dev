@@ -464,114 +464,105 @@ flovyn-dev sync
 
 ### Usable After
 
-GitHub-driven workflow, manual Docker setup.
+GitHub-driven workflow.
 
 ---
 
-## Milestone 5: Per-Worktree Docker Environment
+## ~~Milestone 5: Per-Worktree Docker Environment~~ → Simplified to Port Allocation
 
-**Goal:** Each worktree gets its own isolated Docker stack with unique ports.
+**Status:** 🔄 Simplified - Docker isolation replaced with port allocation
 
-### TODO
+**Reason:** With Milestone 0.7 (configurable ports in `dev/.env`), we can run multiple instances by simply allocating different ports per worktree. No need for per-worktree Docker images.
 
-- [ ] **5.1** Implement port allocation
-  - [ ] Create `~/.flovyn/ports.json` schema
-  - [ ] Allocate ports on `init-env` (find next available offset)
-  - [ ] Release ports on `archive`/`delete`
-  - [ ] Base ports: server=8000, app=3000, pg-server=5435, etc.
+**New approach:**
+- Infrastructure (postgres, nats, jaeger) is shared via `mise run start` from main `dev/`
+- Each worktree gets its own `dev/.env` with auto-allocated unique ports
+- Services run directly (`cargo run`, `pnpm dev`) using the worktree's ports
+- All scripts (`dev.sh`, mise tasks) already read ports from `.env`
 
-- [ ] **5.2** Create docker-compose template
-  - [ ] Template with placeholders for ports and feature name
-  - [ ] Services: postgres-server, postgres-app, nats, jaeger, server, app
-  - [ ] Network: `flovyn-{feature}`
-  - [ ] Volumes with feature-specific names
+### TODO (Simplified)
 
-- [ ] **5.3** Implement `flovyn-dev init-env <feature>`
-  - [ ] Allocate ports
-  - [ ] Generate `worktrees/{feature}/dev/docker-compose.yml`
-  - [ ] Generate `worktrees/{feature}/dev/.env`
-  - [ ] Show allocated ports
+- [ ] **Port allocation on worktree create**
+  - [ ] Track allocated ports in `~/.flovyn/ports.json`
+  - [ ] Allocate unique ports for each worktree (offset from base: 3000, 8000, 9090)
+  - [ ] Generate `worktrees/{feature}/dev/.env` with allocated ports
+  - [ ] Release ports on worktree delete
 
-- [ ] **5.4** Implement `flovyn-dev build <feature>`
-  - [ ] Build `flovyn-server:{feature}` from worktree
-  - [ ] Build `flovyn-app:{feature}` from worktree
-  - [ ] Show build progress/errors
+- [ ] **Implement `flovyn-dev env <feature>`**
+  - [ ] Show allocated ports and URLs for the feature
+  - [ ] Example: `App: http://localhost:3001, Server: http://localhost:8001`
 
-- [ ] **5.5** Implement `flovyn-dev start <feature>`
-  - [ ] Check if images exist (prompt to build if not)
-  - [ ] Run `docker compose up -d`
-  - [ ] Wait for health checks
-  - [ ] Show access URLs
+### Port Allocation Schema
 
-- [ ] **5.6** Implement `flovyn-dev stop <feature>`
-  - [ ] Run `docker compose down`
-  - [ ] Optionally remove volumes (`--volumes` flag)
-
-- [ ] **5.7** Implement `flovyn-dev logs <feature> [service]`
-  - [ ] Run `docker compose logs -f [service]`
-  - [ ] Default: all services
-
-- [ ] **5.8** Implement `flovyn-dev env <feature>`
-  - [ ] Show allocated ports and URLs
-  - [ ] Show container status (running/stopped)
-
-- [ ] **5.9** Implement `flovyn-dev rebuild <feature>`
-  - [ ] Stop containers
-  - [ ] Rebuild images
-  - [ ] Start containers
-  - [ ] Single command for code changes
-
-### Test
-
-```bash
-flovyn-dev create webhook-retry
-flovyn-dev init-env webhook-retry
-cat ~/.flovyn/ports.json  # Should show allocation
-
-flovyn-dev build webhook-retry
-docker images | grep webhook-retry  # Should show images
-
-flovyn-dev start webhook-retry
-flovyn-dev env webhook-retry
-curl http://localhost:3001/health  # Should respond
-
-flovyn-dev logs webhook-retry server
-flovyn-dev stop webhook-retry
+```json
+{
+  "allocations": {
+    "webhook-retry": {
+      "offset": 1,
+      "APP_PORT": 3001,
+      "SERVER_HTTP_PORT": 8001,
+      "SERVER_GRPC_PORT": 9091
+    },
+    "schedules": {
+      "offset": 2,
+      "APP_PORT": 3002,
+      "SERVER_HTTP_PORT": 8002,
+      "SERVER_GRPC_PORT": 9092
+    }
+  },
+  "next_offset": 3
+}
 ```
 
-### Usable After
+### Running Multiple Features in Parallel
 
-Full isolated dev environments per feature.
+```bash
+# Start shared infrastructure (from main dev/)
+cd /home/ubuntu/workspaces/flovyn/dev
+mise run start
+
+# Feature 1: webhook-retry (ports auto-allocated: 3001, 8001, 9091)
+cd worktrees/webhook-retry/dev
+mise run server &  # Uses SERVER_HTTP_PORT=8001
+mise run app &     # Uses APP_PORT=3001
+
+# Feature 2: schedules (ports auto-allocated: 3002, 8002, 9092)
+cd worktrees/schedules/dev
+mise run server &  # Uses SERVER_HTTP_PORT=8002
+mise run app &     # Uses APP_PORT=3002
+
+# Both running simultaneously on different ports
+```
 
 ---
 
-## Milestone 6: Research Workflow
+## Milestone 5: Research Workflow
 
 **Goal:** Lightweight research tasks without full worktree.
 
 ### TODO
 
-- [ ] **6.1** Implement `flovyn-dev research <task>`
+- [ ] **5.1** Implement `flovyn-dev research <task>`
   - [ ] Create `worktrees/{topic}/dev/` only (single repo)
   - [ ] Create research doc from template
   - [ ] Create tmux session
   - [ ] Send research-specific initial prompt
 
-- [ ] **6.2** Create research initial prompt template
+- [ ] **5.2** Create research initial prompt template
   - [ ] Focus on exploration, not implementation
   - [ ] Include GitHub issue content
   - [ ] Ask for findings and recommendation
 
-- [ ] **6.3** Integrate with GitHub Projects
+- [ ] **5.3** Integrate with GitHub Projects
   - [ ] Update status: Backlog → Research
   - [ ] Support `pick --research` to filter Research-type items
 
-- [ ] **6.4** Handle research → design transition
+- [ ] **5.4** Handle research → design transition
   - [ ] `flovyn-dev docs mv {topic} research design`
   - [ ] `flovyn-dev pick {topic}` to create full worktree
   - [ ] Update GitHub status: Research → Design
 
-- [ ] **6.5** Update `delete` for research worktrees
+- [ ] **5.5** Update `delete` for research worktrees
   - [ ] Detect research-only worktrees (only dev/ exists)
   - [ ] Clean up appropriately
 
@@ -596,18 +587,18 @@ Research workflow for exploration tasks.
 
 ---
 
-## Milestone 7: PR Creation + Archive
+## Milestone 6: PR Creation + Archive
 
 **Goal:** Streamlined PR creation and safe cleanup.
 
 ### TODO
 
-- [ ] **7.1** Implement `flovyn-dev pr <feature>`
+- [ ] **6.1** Implement `flovyn-dev pr <feature>`
   - [ ] Detect repos with uncommitted changes (warn)
   - [ ] Detect repos with unpushed commits
   - [ ] Push branches to origin
 
-- [ ] **7.2** Create PRs with template
+- [ ] **6.2** Create PRs with template
   - [ ] Extract summary from design doc
   - [ ] Generate PR body with:
     - Summary
@@ -616,22 +607,19 @@ Research workflow for exploration tasks.
   - [ ] Create PR via `gh pr create`
   - [ ] Link PR to GitHub Project item
 
-- [ ] **7.3** Implement `flovyn-dev archive <feature>` pre-flight checks
+- [ ] **6.3** Implement `flovyn-dev archive <feature>` pre-flight checks
   - [ ] Check for uncommitted changes (block if dirty)
   - [ ] Check all PRs are merged (block if open)
   - [ ] Show clear error messages
 
-- [ ] **7.4** Implement archive cleanup
-  - [ ] Stop Docker environment (if running)
-  - [ ] Remove Docker images
-  - [ ] Remove Docker volumes
-  - [ ] Release port allocation
+- [ ] **6.4** Implement archive cleanup
+  - [ ] Release port allocation (update `~/.flovyn/ports.json`)
   - [ ] Archive docs (`flovyn-dev docs archive`)
   - [ ] Remove worktrees
   - [ ] Kill tmux session
   - [ ] Update GitHub status: → Done
 
-- [ ] **7.5** Add `--force` flag for archive
+- [ ] **6.5** Add `--force` flag for archive
   - [ ] Skip pre-flight checks
   - [ ] Require confirmation
   - [ ] Use for abandoned features
@@ -650,7 +638,6 @@ flovyn-dev archive webhook-retry
 # Check cleanup:
 ls worktrees/ | grep webhook-retry  # Should not exist
 tmux list-sessions | grep webhook-retry  # Should not exist
-docker images | grep webhook-retry  # Should not exist
 cat ~/.flovyn/ports.json  # Should not have webhook-retry
 ```
 
@@ -662,17 +649,22 @@ Complete end-to-end workflow.
 
 ## Summary
 
-| Milestone | Key Feature | Dependencies | Effort |
-|-----------|-------------|--------------|--------|
-| 0 | Migrate existing docs | None | Low |
-| 1 | CLI + Worktrees | M0 | Low |
-| 2 | Doc templates + lifecycle | M1 | Low |
-| 3 | Tmux + Claude | M1, M2 | Medium |
-| 4 | GitHub Projects | M1, M2, M3 | Medium |
-| 5 | Docker per-worktree | M1 | High |
-| 6 | Research workflow | M1, M2, M3, M4 | Low |
-| 7 | PR + Archive | M1, M4, M5 | Medium |
+| Milestone | Key Feature | Dependencies | Effort | Status |
+|-----------|-------------|--------------|--------|--------|
+| 0 | Migrate existing docs | None | Low | ✅ Done |
+| 0.5 | Standardize on Mise | M0 | Low | ✅ Done |
+| 0.6 | Centralized APP_URL | M0.5 | Low | ✅ Done |
+| 0.7 | Configurable Ports | M0.6 | Low | ✅ Done |
+| 1 | CLI + Worktrees | M0 | Low | |
+| 2 | Doc templates + lifecycle | M1 | Low | |
+| 3 | Tmux + Claude | M1, M2 | Medium | |
+| 4 | GitHub Projects | M1, M2, M3 | Medium | |
+| ~~5~~ | ~~Docker per-worktree~~ → Port allocation | M1 | Low | Simplified |
+| 5 | Research workflow | M1, M2, M3, M4 | Low | |
+| 6 | PR + Archive | M1, M4 | Medium | |
 
-**Recommended order:** 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7
+**Recommended order:** 0 → 0.5 → 0.6 → 0.7 → 1 → 2 → 3 → 4 → 5 → 6
+
+Port allocation (formerly M5) is now integrated into M1 (worktree create).
 
 Each milestone can be tested independently before proceeding.
