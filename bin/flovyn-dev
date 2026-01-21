@@ -490,8 +490,16 @@ def tmux_kill_session(session_name: str) -> bool:
 
 
 def tmux_send_keys(session_name: str, keys: str, enter: bool = True, pane: Optional[str] = None) -> None:
-    """Send keys to a tmux session (optionally to a specific pane)."""
-    target = f"{session_name}:{pane}" if pane else session_name
+    """Send keys to a tmux session (optionally to a specific pane).
+
+    If pane starts with '%', it's a pane ID and used directly.
+    Otherwise it's treated as a pane index within the session.
+    """
+    if pane:
+        # Pane IDs start with %, use directly
+        target = pane if pane.startswith("%") else f"{session_name}:{pane}"
+    else:
+        target = session_name
     cmd = ["tmux", "send-keys", "-t", target, keys]
     if enter:
         cmd.append("Enter")
