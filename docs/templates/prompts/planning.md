@@ -12,6 +12,7 @@ The plan should include:
 1. Phased TODO list with checkboxes (- [ ] task)
 2. Clear, actionable tasks
 3. Test plan
+4. Be critical of what could be missed.
 4. Any rollout considerations
 5. Unless I gives you explicitly consent, in case of doubt, you can ask, otherwise, there is no 'Deferred/Optional' tasks.
 6. Don't repeat what is already said in the design, you can refers to certains parts of it, if needed.
