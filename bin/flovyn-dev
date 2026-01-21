@@ -1831,43 +1831,45 @@ def cmd_move(args: argparse.Namespace) -> int:
     print(f"Current phase: {current_phase}")
     print(f"New phase: {new_phase}")
 
-    if current_phase == new_phase:
+    already_in_phase = current_phase == new_phase
+    if already_in_phase:
         print(colored("Already in that phase.", Colors.YELLOW))
-        return 0
+        # Still continue to send prompt if applicable
 
-    # Update phase
-    try:
-        fields = gh_get_field_ids()
-        if "Phase" not in fields or new_phase not in fields["Phase"]["options"]:
-            print(colored(f"Error: Could not find Phase field or option", Colors.RED))
+    # Update phase (skip if already in phase)
+    if not already_in_phase:
+        try:
+            fields = gh_get_field_ids()
+            if "Phase" not in fields or new_phase not in fields["Phase"]["options"]:
+                print(colored(f"Error: Could not find Phase field or option", Colors.RED))
+                return 1
+
+            print(f"Updating phase...", end=" ")
+            gh_update_item_field(
+                item["id"],
+                fields["Phase"]["id"],
+                new_phase,
+                is_single_select=True,
+                option_id=fields["Phase"]["options"][new_phase]
+            )
+            print(colored("✓", Colors.GREEN))
+
+        except RuntimeError as e:
+            print(colored(f"Error: {e}", Colors.RED))
             return 1
 
-        print(f"Updating phase...", end=" ")
-        gh_update_item_field(
-            item["id"],
-            fields["Phase"]["id"],
-            new_phase,
-            is_single_select=True,
-            option_id=fields["Phase"]["options"][new_phase]
-        )
-        print(colored("✓", Colors.GREEN))
+        # Update tracking section in GitHub issue
+        if item.get("repo") and item.get("issue_number"):
+            summary = generate_phase_tracking_summary(feature, new_phase)
+            print(f"Updating issue #{item['issue_number']}...", end=" ")
+            try:
+                gh_update_issue_tracking(item["repo"], item["issue_number"], new_phase, feature, summary)
+                print(colored("✓", Colors.GREEN))
+            except Exception as e:
+                print(colored(f"Warning: {e}", Colors.YELLOW))
 
-    except RuntimeError as e:
-        print(colored(f"Error: {e}", Colors.RED))
-        return 1
-
-    # Update tracking section in GitHub issue
-    if item.get("repo") and item.get("issue_number"):
-        summary = generate_phase_tracking_summary(feature, new_phase)
-        print(f"Updating issue #{item['issue_number']}...", end=" ")
-        try:
-            gh_update_issue_tracking(item["repo"], item["issue_number"], new_phase, feature, summary)
-            print(colored("✓", Colors.GREEN))
-        except Exception as e:
-            print(colored(f"Warning: {e}", Colors.YELLOW))
-
-    print()
-    print(colored(f"Moved '{feature}' from {current_phase} to {new_phase}", Colors.GREEN))
+        print()
+        print(colored(f"Moved '{feature}' from {current_phase} to {new_phase}", Colors.GREEN))
 
     # Launch new Claude in horizontal split for phase transition
     if args.send_prompt and new_phase in ("Planning", "In Progress"):
