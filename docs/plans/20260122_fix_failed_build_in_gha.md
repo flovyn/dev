@@ -86,6 +86,7 @@ Add `cast()` imports and wrap FFI return values. All 16 errors are `[no-any-retu
 - Developers will need to run `pre-commit install` once after merging to enable local hooks
 - Consider adding a note to README.md about pre-commit setup (or document in CLAUDE.md)
 
-## Additional Fix
+## Additional Fixes
 
 - [x] Added `httpx` to mypy ignore_missing_imports in pyproject.toml (httpx is an optional runtime dependency in flovyn/testing/environment.py)
+- [x] Fixed CI workflow e2e test command: added `-m e2e` to override default `addopts = "-m 'not e2e'"` in pyproject.toml
