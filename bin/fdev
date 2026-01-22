@@ -1921,11 +1921,19 @@ def cmd_move(args: argparse.Namespace) -> int:
         print()
         print(colored(f"Moved '{feature}' from {current_status} to {new_status}", Colors.GREEN))
 
-    # Start Claude and send status prompt for Planning/Implementation
-    if args.send_prompt and new_status in ("Planning", "Implementing"):
+    # Start Claude and send status prompt for Design/Planning/Implementation
+    statuses_with_prompts = ("Design", "Planning", "Implementing")
+    if args.send_prompt and new_status in statuses_with_prompts:
         if tmux_session_exists(feature):
             print()
-            if new_status == "Planning":
+            if new_status == "Design":
+                print(colored("Starting Claude for Design status...", Colors.YELLOW))
+                docs = find_feature_docs(feature)
+                design_path = docs["design"][0] if docs["design"] else None
+                issue_repo = item.get("repo")
+                issue_number = item.get("issue_number")
+                prompt = get_design_prompt(feature, design_path, issue_repo, issue_number)
+            elif new_status == "Planning":
                 print(colored("Starting Claude for Planning status...", Colors.YELLOW))
                 prompt = get_planning_prompt(feature)
             else:  # Implementing
