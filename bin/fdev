@@ -2794,7 +2794,7 @@ Examples:
   fdev commit webhook-retry -m "feat: add retry"
   fdev env webhook-retry           Show allocated ports
   fdev open webhook-retry          Open design doc in $EDITOR
-  fdev open webhook-retry plan     Open plan doc
+  fdev open webhook-retry -t plan  Open plan doc
   fdev docs list webhook-retry     List all docs for feature
   fdev docs mv topic research design  Move research doc to design
   fdev docs promote webhook-retry  Convert to large feature structure
@@ -2888,7 +2888,7 @@ Examples:
     # open
     p_open = subparsers.add_parser("open", help="Open design or plan doc in $EDITOR")
     p_open.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
-    p_open.add_argument("type", nargs="?", default="design", choices=["design", "plan"], help="Doc type (default: design)")
+    p_open.add_argument("-t", "--type", dest="type", default="design", choices=["design", "plan"], help="Doc type: design or plan (default: design)")
     p_open.set_defaults(func=cmd_open)
 
     # docs (with subcommands)
