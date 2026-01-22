@@ -285,6 +285,57 @@ def list_all_worktrees() -> list[str]:
     ])
 
 
+def delete_worktree(feature: str, force: bool = False, delete_branches: bool = False) -> None:
+    """Delete worktrees for a feature.
+
+    Args:
+        feature: Feature name
+        force: Force delete even with uncommitted changes
+        delete_branches: Also delete local branches
+    """
+    if not worktree_exists(feature):
+        raise ValueError(f"Worktree '{feature}' does not exist")
+
+    worktree_path = WORKTREES_DIR / feature
+
+    # Remove worktrees for each repo
+    for repo in REPOS:
+        repo_path = FLOVYN_ROOT / repo
+        target_path = worktree_path / repo
+
+        if not target_path.exists():
+            continue
+
+        try:
+            if force:
+                run_git(repo_path, "worktree", "remove", str(target_path), "--force")
+            else:
+                run_git(repo_path, "worktree", "remove", str(target_path))
+        except subprocess.CalledProcessError:
+            # Try to remove manually if git worktree fails
+            shutil.rmtree(target_path)
+            run_git(repo_path, "worktree", "prune", check=False)
+
+    # Remove worktree directory if empty
+    try:
+        worktree_path.rmdir()
+    except OSError:
+        # Not empty, try to remove remaining files
+        shutil.rmtree(worktree_path, ignore_errors=True)
+
+    # Delete branches (optional)
+    if delete_branches:
+        for repo in REPOS:
+            repo_path = FLOVYN_ROOT / repo
+            if not repo_path.exists():
+                continue
+            run_git(repo_path, "branch", "-d", feature, capture=True, check=False)
+
+    # Kill tmux session if exists
+    if tmux_session_exists(feature):
+        tmux_kill_session(feature)
+
+
 # =============================================================================
 # Documentation Helpers
 # =============================================================================
@@ -304,15 +355,22 @@ def is_large_feature(feature: str) -> bool:
     return (FEATURES_DIR / feature).exists()
 
 
-def find_feature_docs(feature: str) -> dict[str, list[Path]]:
+def find_feature_docs(feature: str, worktree: Optional[str] = None) -> dict[str, list[Path]]:
     """Find all docs for a feature. Returns dict with 'design', 'plan' keys.
 
-    Uses get_docs_dir() to find docs in worktree if running from one.
+    Args:
+        feature: Feature name to search for
+        worktree: If specified, look in this worktree's docs instead of using cwd detection
     """
     docs = {"design": [], "plan": []}
 
-    # Get context-aware docs directory (worktree or main)
-    docs_dir = get_docs_dir()
+    # Get docs directory - explicit worktree or context-aware
+    if worktree:
+        docs_dir = WORKTREES_DIR / worktree / "dev" / "docs"
+        if not docs_dir.exists():
+            docs_dir = get_docs_dir()
+    else:
+        docs_dir = get_docs_dir()
     design_dir = docs_dir / "design"
     plans_dir = docs_dir / "plans"
     features_dir = docs_dir / "features"
@@ -597,12 +655,16 @@ def get_design_prompt(feature: str, design_path: Optional[Path], issue_repo: Opt
     )
 
 
-def get_planning_prompt(feature: str) -> str:
+def get_planning_prompt(feature: str, worktree: Optional[str] = None) -> str:
     """Generate prompt for Planning phase - create implementation plan."""
     template = load_template(PROMPTS_DIR / "planning.md")
 
-    docs_dir = get_docs_dir()
-    docs = find_feature_docs(feature)
+    # Use worktree docs if specified
+    if worktree:
+        docs_dir = WORKTREES_DIR / worktree / "dev" / "docs"
+    else:
+        docs_dir = get_docs_dir()
+    docs = find_feature_docs(feature, worktree=worktree)
     design_path = f"dev/{docs['design'][0].relative_to(docs_dir.parent)}" if docs["design"] else "No design doc found"
 
     if is_large_feature(feature):
@@ -617,12 +679,16 @@ def get_planning_prompt(feature: str) -> str:
     )
 
 
-def get_implementation_prompt(feature: str) -> str:
+def get_implementation_prompt(feature: str, worktree: Optional[str] = None) -> str:
     """Generate prompt for Implementation phase - execute the plan."""
     template = load_template(PROMPTS_DIR / "implementation.md")
 
-    docs_dir = get_docs_dir()
-    docs = find_feature_docs(feature)
+    # Use worktree docs if specified
+    if worktree:
+        docs_dir = WORKTREES_DIR / worktree / "dev" / "docs"
+    else:
+        docs_dir = get_docs_dir()
+    docs = find_feature_docs(feature, worktree=worktree)
     plan_path = f"dev/{docs['plan'][0].relative_to(docs_dir.parent)}" if docs["plan"] else "No plan doc found"
 
     return template.substitute(
@@ -1086,18 +1152,11 @@ def cmd_create(args: argparse.Namespace) -> int:
         if tmux_create_session(feature, worktree_path):
             print(colored("✓", Colors.GREEN))
 
-            # Launch Claude Code
-            print(f"  Launching Claude Code...", end=" ")
-            tmux_send_keys(feature, "claude")
-            print(colored("✓", Colors.GREEN))
-
-            # Wait for Claude to initialize
-            time.sleep(2)
-
-            # Send Design phase prompt
-            print(f"  Sending Design phase prompt...", end=" ")
+            # Launch Claude Code with Design phase prompt
+            print(f"  Launching Claude Code with prompt...", end=" ")
             design_prompt = get_design_prompt(feature, design_path, issue_repo, issue_number)
-            tmux_send_keys(feature, design_prompt)
+            escaped_prompt = shlex.quote(design_prompt)
+            tmux_send_keys(feature, f"claude {escaped_prompt}")
             print(colored("✓", Colors.GREEN))
         else:
             print(colored("(already exists)", Colors.YELLOW))
@@ -1632,16 +1691,11 @@ def cmd_attach(args: argparse.Namespace) -> int:
                 tmux_create_session(feature, worktree_path)
                 print(colored("✓", Colors.GREEN))
 
-                print(f"  Launching Claude Code...", end=" ")
-                tmux_send_keys(feature, "claude")
-                print(colored("✓", Colors.GREEN))
-
-                time.sleep(2)
-
-                # Send resume prompt since worktree already exists
-                print(f"  Sending resume prompt...", end=" ")
+                # Launch Claude with resume prompt since worktree already exists
+                print(f"  Launching Claude Code with prompt...", end=" ")
                 resume_prompt = get_resume_prompt(feature)
-                tmux_send_keys(feature, resume_prompt)
+                escaped_prompt = shlex.quote(resume_prompt)
+                tmux_send_keys(feature, f"claude {escaped_prompt}")
                 print(colored("✓", Colors.GREEN))
             else:
                 print("Cancelled.")
@@ -1921,16 +1975,24 @@ def cmd_move(args: argparse.Namespace) -> int:
         print()
         print(colored(f"Moved '{feature}' from {current_status} to {new_status}", Colors.GREEN))
 
-    # Start Claude and send status prompt for Planning/Implementation
-    if args.send_prompt and new_status in ("Planning", "Implementing"):
+    # Start Claude and send status prompt for Design/Planning/Implementation
+    statuses_with_prompts = ("Design", "Planning", "Implementing")
+    if args.send_prompt and new_status in statuses_with_prompts:
         if tmux_session_exists(feature):
             print()
-            if new_status == "Planning":
+            if new_status == "Design":
+                print(colored("Starting Claude for Design status...", Colors.YELLOW))
+                docs = find_feature_docs(feature, worktree=feature)
+                design_path = docs["design"][0] if docs["design"] else None
+                issue_repo = item.get("repo")
+                issue_number = item.get("issue_number")
+                prompt = get_design_prompt(feature, design_path, issue_repo, issue_number)
+            elif new_status == "Planning":
                 print(colored("Starting Claude for Planning status...", Colors.YELLOW))
-                prompt = get_planning_prompt(feature)
+                prompt = get_planning_prompt(feature, worktree=feature)
             else:  # Implementing
                 print(colored("Starting Claude for Implementing status...", Colors.YELLOW))
-                prompt = get_implementation_prompt(feature)
+                prompt = get_implementation_prompt(feature, worktree=feature)
 
             # Start Claude with the prompt as initial message
             print(f"  Launching Claude Code with prompt...", end=" ")
@@ -1955,6 +2017,12 @@ def cmd_move(args: argparse.Namespace) -> int:
             print(colored(f"Created/found {len(created_prs)} PR(s):", Colors.GREEN))
             for repo, url in created_prs:
                 print(f"  - {repo}: {url}")
+
+    # Merge PRs and update main when moving to Done
+    if new_status == "Done":
+        print()
+        print(colored("Completing feature...", Colors.YELLOW))
+        merge_and_cleanup_feature(feature)
 
     return 0
 
@@ -2123,18 +2191,11 @@ def cmd_research(args: argparse.Namespace) -> int:
         if tmux_create_session(topic, worktree_path):
             print(colored("✓", Colors.GREEN))
 
-            # Launch Claude Code
-            print(f"  Launching Claude Code...", end=" ")
-            tmux_send_keys(topic, "claude")
-            print(colored("✓", Colors.GREEN))
-
-            # Wait for Claude to initialize
-            time.sleep(2)
-
-            # Send research prompt
-            print(f"  Sending research prompt...", end=" ")
+            # Launch Claude Code with research prompt
+            print(f"  Launching Claude Code with prompt...", end=" ")
             research_prompt = get_research_prompt(topic, research_path)
-            tmux_send_keys(topic, research_prompt)
+            escaped_prompt = shlex.quote(research_prompt)
+            tmux_send_keys(topic, f"claude {escaped_prompt}")
             print(colored("✓", Colors.GREEN))
         else:
             print(colored("(already exists)", Colors.YELLOW))
@@ -2301,6 +2362,100 @@ def create_prs_for_feature(feature: str, update_issue: bool = True) -> list[tupl
             print(colored(f"Warning: Could not update GitHub issue: {e}", Colors.YELLOW))
 
     return created_prs
+
+
+def merge_and_cleanup_feature(feature: str) -> None:
+    """Merge PRs for a feature and update main branches.
+
+    1. Find all open PRs for the feature
+    2. Merge them (squash merge)
+    3. Update main branches in main repos
+    4. Offer to clean up worktree
+    """
+    repos = get_worktree_repos(feature) if worktree_exists(feature) else REPOS
+
+    # Phase 1: Find and merge PRs
+    merged_prs = []
+    failed_prs = []
+
+    print(colored("Merging PRs...", Colors.CYAN))
+    for repo in repos:
+        # Check if PR exists for this branch
+        result = subprocess.run(
+            ["gh", "pr", "view", feature, "--repo", f"flovyn/{repo}", "--json", "url,state,mergeable"],
+            capture_output=True, text=True, check=False
+        )
+        if result.returncode != 0:
+            continue  # No PR for this repo
+
+        try:
+            pr_data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            continue
+
+        pr_url = pr_data.get("url", "")
+        state = pr_data.get("state", "")
+
+        if state == "MERGED":
+            print(f"  {repo}: Already merged")
+            merged_prs.append(repo)
+            continue
+
+        if state != "OPEN":
+            print(f"  {repo}: PR is {state}, skipping")
+            continue
+
+        # Merge the PR (squash)
+        print(f"  {repo}: Merging...", end=" ")
+        merge_result = subprocess.run(
+            ["gh", "pr", "merge", feature, "--repo", f"flovyn/{repo}", "--squash", "--delete-branch"],
+            capture_output=True, text=True, check=False
+        )
+        if merge_result.returncode == 0:
+            print(colored("✓", Colors.GREEN))
+            merged_prs.append(repo)
+        else:
+            print(colored(f"✗ {merge_result.stderr.strip()}", Colors.RED))
+            failed_prs.append((repo, merge_result.stderr.strip()))
+
+    if failed_prs:
+        print()
+        print(colored("Some PRs failed to merge:", Colors.YELLOW))
+        for repo, error in failed_prs:
+            print(f"  - {repo}: {error}")
+
+    # Phase 2: Update main branches in main repos
+    if merged_prs:
+        print()
+        print(colored("Updating main branches...", Colors.CYAN))
+        for repo in merged_prs:
+            main_repo_path = FLOVYN_ROOT / repo
+            if not main_repo_path.exists():
+                continue
+
+            print(f"  {repo}...", end=" ")
+            try:
+                # Fetch and pull main
+                run_git(main_repo_path, "fetch", "origin", "main")
+                run_git(main_repo_path, "checkout", "main")
+                run_git(main_repo_path, "pull", "origin", "main")
+                print(colored("✓", Colors.GREEN))
+            except subprocess.CalledProcessError as e:
+                print(colored(f"✗ {e}", Colors.RED))
+
+    # Phase 3: Offer to clean up worktree
+    if worktree_exists(feature) and merged_prs:
+        print()
+        response = input(f"Delete worktree '{feature}'? [y/N] ").strip().lower()
+        if response == "y":
+            print(f"Cleaning up worktree...", end=" ")
+            try:
+                delete_worktree(feature)
+                print(colored("✓", Colors.GREEN))
+            except Exception as e:
+                print(colored(f"✗ {e}", Colors.RED))
+        else:
+            print(f"Worktree kept. Delete later with: fdev delete {feature}")
 
 
 def cmd_push(args: argparse.Namespace) -> int:
@@ -2639,7 +2794,7 @@ Examples:
   fdev commit webhook-retry -m "feat: add retry"
   fdev env webhook-retry           Show allocated ports
   fdev open webhook-retry          Open design doc in $EDITOR
-  fdev open webhook-retry plan     Open plan doc
+  fdev open webhook-retry -t plan  Open plan doc
   fdev docs list webhook-retry     List all docs for feature
   fdev docs mv topic research design  Move research doc to design
   fdev docs promote webhook-retry  Convert to large feature structure
@@ -2733,7 +2888,7 @@ Examples:
     # open
     p_open = subparsers.add_parser("open", help="Open design or plan doc in $EDITOR")
     p_open.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
-    p_open.add_argument("type", nargs="?", default="design", choices=["design", "plan"], help="Doc type (default: design)")
+    p_open.add_argument("-t", "--type", dest="type", default="design", choices=["design", "plan"], help="Doc type: design or plan (default: design)")
     p_open.set_defaults(func=cmd_open)
 
     # docs (with subcommands)
