@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-flovyn-dev - Development workflow manager for Flovyn
+fdev - Development workflow manager for Flovyn
 
 Manages worktrees across multiple repos with isolated port allocation.
 Each worktree gets its own set of ports for all services.
@@ -1114,7 +1114,7 @@ def cmd_create(args: argparse.Namespace) -> int:
     if not no_session:
         print()
         print("Tmux session created. To attach:")
-        print(f"  flovyn-dev attach {feature}")
+        print(f"  fdev attach {feature}")
     else:
         print()
         print("Next steps:")
@@ -1324,8 +1324,8 @@ def cmd_list(args: argparse.Namespace) -> int:
 
     if not worktrees:
         print(colored("No worktrees found.", Colors.YELLOW))
-        print(f"Create one with: flovyn-dev create <feature>")
-        print(f"Or pick from GitHub: flovyn-dev pick")
+        print(f"Create one with: fdev create <feature>")
+        print(f"Or pick from GitHub: fdev pick")
         return 0
 
     print(colored("Local worktrees:", Colors.BLUE))
@@ -1647,7 +1647,7 @@ def cmd_attach(args: argparse.Namespace) -> int:
                 return 1
         else:
             print(colored(f"Error: No session or worktree for '{feature}'", Colors.RED))
-            print(f"Create one with: flovyn-dev create {feature}")
+            print(f"Create one with: fdev create {feature}")
             return 1
     elif resume:
         # Send resume prompt before attaching
@@ -1693,7 +1693,7 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         print(f"    Last activity: {activity_time}")
         print()
 
-    print(f"Attach with: flovyn-dev attach <feature>")
+    print(f"Attach with: fdev attach <feature>")
     return 0
 
 
@@ -1938,11 +1938,11 @@ def cmd_move(args: argparse.Namespace) -> int:
             print(colored("✓", Colors.GREEN))
 
             print()
-            print(f"Attach with: flovyn-dev attach {feature} --no-resume")
+            print(f"Attach with: fdev attach {feature} --no-resume")
         else:
             print()
             print(colored("No tmux session found.", Colors.YELLOW))
-            print(f"Create one with: flovyn-dev attach {feature}")
+            print(f"Create one with: fdev attach {feature}")
 
     # Create PRs when moving to Review
     if new_status == "Review":
@@ -2146,15 +2146,15 @@ def cmd_research(args: argparse.Namespace) -> int:
 
     if not no_session:
         print("Tmux session created. To attach:")
-        print(f"  flovyn-dev attach {topic}")
+        print(f"  fdev attach {topic}")
     else:
         print("Next steps:")
         print(f"  cd {worktree_path}")
 
     print()
     print("When research leads to implementation:")
-    print(f"  flovyn-dev docs mv {topic} research design  # Convert to design doc")
-    print(f"  flovyn-dev pick {topic}                     # Create full worktree")
+    print(f"  fdev docs mv {topic} research design  # Convert to design doc")
+    print(f"  fdev pick {topic}                     # Create full worktree")
 
     return 0
 
@@ -2599,8 +2599,8 @@ def cmd_docs_mv(args: argparse.Namespace) -> int:
     if from_type == "research" and to_type == "design":
         print()
         print("Next steps:")
-        print(f"  flovyn-dev open {feature}    # Edit design doc")
-        print(f"  flovyn-dev pick {feature}    # Create full worktree (if research-only)")
+        print(f"  fdev open {feature}    # Edit design doc")
+        print(f"  fdev pick {feature}    # Create full worktree (if research-only)")
 
     return 0
 
@@ -2615,35 +2615,35 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  flovyn-dev create webhook-retry        Create worktrees + tmux session + Claude
-  flovyn-dev create auth-system --large  Create large feature with subdirectory
-  flovyn-dev create foo --no-session     Create without tmux session
-  flovyn-dev research retry-strategies   Create research worktree (dev/ only)
-  flovyn-dev attach webhook-retry        Attach to tmux session (with resume prompt)
-  flovyn-dev attach webhook-retry --no-resume  Attach without sending resume prompt
-  flovyn-dev sessions                    List all flovyn tmux sessions
-  flovyn-dev list                        List all local worktrees
-  flovyn-dev list --remote               List GitHub Project items
-  flovyn-dev list -r --status Backlog    List Backlog items from GitHub
-  flovyn-dev pick                        Pick from Backlog and create worktree
-  flovyn-dev pick --status Design        Pick from Design status
-  flovyn-dev pick --research             Pick Research items only
-  flovyn-dev move Planning               Move feature to Planning status
-  flovyn-dev sync                        Compare local vs GitHub items
-  flovyn-dev sync --update-progress      Sync and post progress to issues
-  flovyn-dev pr webhook-retry            Push branches and create PRs
-  flovyn-dev archive webhook-retry       Archive feature (cleanup after merge)
-  flovyn-dev archive webhook-retry -f    Force archive without checks
-  flovyn-dev status webhook-retry        Show git status
-  flovyn-dev commit webhook-retry -m "feat: add retry"
-  flovyn-dev env webhook-retry           Show allocated ports
-  flovyn-dev open webhook-retry          Open design doc in $EDITOR
-  flovyn-dev open webhook-retry plan     Open plan doc
-  flovyn-dev docs list webhook-retry     List all docs for feature
-  flovyn-dev docs mv topic research design  Move research doc to design
-  flovyn-dev docs promote webhook-retry  Convert to large feature structure
-  flovyn-dev docs archive webhook-retry  Archive completed feature docs
-  flovyn-dev delete webhook-retry        Delete worktrees + tmux session
+  fdev create webhook-retry        Create worktrees + tmux session + Claude
+  fdev create auth-system --large  Create large feature with subdirectory
+  fdev create foo --no-session     Create without tmux session
+  fdev research retry-strategies   Create research worktree (dev/ only)
+  fdev attach webhook-retry        Attach to tmux session (with resume prompt)
+  fdev attach webhook-retry --no-resume  Attach without sending resume prompt
+  fdev sessions                    List all flovyn tmux sessions
+  fdev list                        List all local worktrees
+  fdev list --remote               List GitHub Project items
+  fdev list -r --status Backlog    List Backlog items from GitHub
+  fdev pick                        Pick from Backlog and create worktree
+  fdev pick --status Design        Pick from Design status
+  fdev pick --research             Pick Research items only
+  fdev move Planning               Move feature to Planning status
+  fdev sync                        Compare local vs GitHub items
+  fdev sync --update-progress      Sync and post progress to issues
+  fdev pr webhook-retry            Push branches and create PRs
+  fdev archive webhook-retry       Archive feature (cleanup after merge)
+  fdev archive webhook-retry -f    Force archive without checks
+  fdev status webhook-retry        Show git status
+  fdev commit webhook-retry -m "feat: add retry"
+  fdev env webhook-retry           Show allocated ports
+  fdev open webhook-retry          Open design doc in $EDITOR
+  fdev open webhook-retry plan     Open plan doc
+  fdev docs list webhook-retry     List all docs for feature
+  fdev docs mv topic research design  Move research doc to design
+  fdev docs promote webhook-retry  Convert to large feature structure
+  fdev docs archive webhook-retry  Archive completed feature docs
+  fdev delete webhook-retry        Delete worktrees + tmux session
         """,
     )
 

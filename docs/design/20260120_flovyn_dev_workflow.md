@@ -15,7 +15,7 @@ flovyn/
 ├── sdk-python/             # Python SDK
 ├── sdk-rust/               # Rust SDK
 ├── dev/
-│   └── bin/flovyn-dev      # Development workflow manager
+│   └── bin/fdev      # Development workflow manager
 └── worktrees/              # Feature worktrees (e.g., worktrees/schedules/)
 ```
 
@@ -128,7 +128,7 @@ gh project create --owner flovyn --title "Development" --format json
 | **Review** | PRs created | All PRs approved | `gh pr create` |
 | **Done** | PRs merged | Docs archived | `gh pr merge` |
 
-### 3. `flovyn-dev` - Development Workflow Manager
+### 3. `fdev` - Development Workflow Manager
 
 Replace `worktree.py` with a comprehensive development workflow tool that integrates GitHub Projects, local worktrees, documentation, and Claude Code sessions.
 
@@ -136,10 +136,10 @@ Replace `worktree.py` with a comprehensive development workflow tool that integr
 
 ```bash
 # The tool lives in dev/bin/
-./dev/bin/flovyn-dev
+./dev/bin/fdev
 
 # Or add to PATH via alias
-alias flovyn-dev='/home/ubuntu/workspaces/flovyn/dev/bin/flovyn-dev'
+alias fdev='/home/ubuntu/workspaces/flovyn/dev/bin/fdev'
 ```
 
 #### Command Overview
@@ -148,63 +148,63 @@ alias flovyn-dev='/home/ubuntu/workspaces/flovyn/dev/bin/flovyn-dev'
 # ─────────────────────────────────────────────────────────
 # VIEWING (pulls from GitHub Projects)
 # ─────────────────────────────────────────────────────────
-flovyn-dev list                     # List all tasks from GitHub Project
-flovyn-dev list --status Design     # Filter by status
-flovyn-dev list --local             # Show only tasks with local state
-flovyn-dev show <task>              # Show details of one task
+fdev list                     # List all tasks from GitHub Project
+fdev list --status Design     # Filter by status
+fdev list --local             # Show only tasks with local state
+fdev show <task>              # Show details of one task
 
 # ─────────────────────────────────────────────────────────
 # WORKING (bidirectional sync)
 # ─────────────────────────────────────────────────────────
-flovyn-dev pick <task>              # Select task from GitHub, set up locally (full worktree)
-flovyn-dev research <task>          # Start research task (dev worktree only, no code repos)
-flovyn-dev attach <task>            # Attach to tmux session (resume work)
-flovyn-dev open <task>              # Open docs in editor
+fdev pick <task>              # Select task from GitHub, set up locally (full worktree)
+fdev research <task>          # Start research task (dev worktree only, no code repos)
+fdev attach <task>            # Attach to tmux session (resume work)
+fdev open <task>              # Open docs in editor
 
 # ─────────────────────────────────────────────────────────
 # STATE MANAGEMENT (local ↔ GitHub)
 # ─────────────────────────────────────────────────────────
-flovyn-dev move <task> <status>     # Move to new status (updates GitHub + local)
-flovyn-dev sync                     # Show differences between local and GitHub
-flovyn-dev sync --pull              # Trust GitHub, update local
-flovyn-dev sync --push              # Trust local, update GitHub
+fdev move <task> <status>     # Move to new status (updates GitHub + local)
+fdev sync                     # Show differences between local and GitHub
+fdev sync --pull              # Trust GitHub, update local
+fdev sync --push              # Trust local, update GitHub
 
 # ─────────────────────────────────────────────────────────
 # DOCUMENTATION
 # ─────────────────────────────────────────────────────────
-flovyn-dev docs <task>              # List all docs for a feature
-flovyn-dev docs mv <task> <from> <to>  # Move doc (e.g., research → design)
-flovyn-dev docs archive <task>      # Move docs to archive/
+fdev docs <task>              # List all docs for a feature
+fdev docs mv <task> <from> <to>  # Move doc (e.g., research → design)
+fdev docs archive <task>      # Move docs to archive/
 
 # ─────────────────────────────────────────────────────────
 # GIT OPERATIONS (from worktree.py)
 # ─────────────────────────────────────────────────────────
-flovyn-dev git-status <task>        # Git status across repos in worktree
-flovyn-dev commit <task> -m "msg"   # Commit across repos with same message
-flovyn-dev pr <task>                # Create PRs, link to GitHub Project card
+fdev git-status <task>        # Git status across repos in worktree
+fdev commit <task> -m "msg"   # Commit across repos with same message
+fdev pr <task>                # Create PRs, link to GitHub Project card
 
 # ─────────────────────────────────────────────────────────
 # DOCKER ENVIRONMENT
 # ─────────────────────────────────────────────────────────
-flovyn-dev build <task>             # Build Docker images tagged with branch name
-flovyn-dev init-env <task>          # Allocate ports, generate docker-compose.yml
-flovyn-dev start <task>             # Start Docker environment
-flovyn-dev stop <task>              # Stop Docker environment
-flovyn-dev rebuild <task>           # Rebuild images and restart
-flovyn-dev logs <task> [service]    # View logs
-flovyn-dev env <task>               # Show environment URLs
+fdev build <task>             # Build Docker images tagged with branch name
+fdev init-env <task>          # Allocate ports, generate docker-compose.yml
+fdev start <task>             # Start Docker environment
+fdev stop <task>              # Stop Docker environment
+fdev rebuild <task>           # Rebuild images and restart
+fdev logs <task> [service]    # View logs
+fdev env <task>               # Show environment URLs
 
 # ─────────────────────────────────────────────────────────
 # CLEANUP
 # ─────────────────────────────────────────────────────────
-flovyn-dev archive <task>           # Safety checks, then cleanup (see below)
-flovyn-dev delete <task>            # Delete local state only (keeps GitHub, no checks)
+fdev archive <task>           # Safety checks, then cleanup (see below)
+fdev delete <task>            # Delete local state only (keeps GitHub, no checks)
 ```
 
-#### `flovyn-dev list` - View All Tasks
+#### `fdev list` - View All Tasks
 
 ```bash
-$ flovyn-dev list
+$ fdev list
 
   Status        │ Task                      │ Branch           │ Local
   ──────────────┼───────────────────────────┼──────────────────┼────────────
@@ -217,16 +217,16 @@ $ flovyn-dev list
   Done          │ Event hooks               │ -                │ archived
 
 # Filter examples
-$ flovyn-dev list --status Implementing
-$ flovyn-dev list --local              # Only tasks with local setup
+$ fdev list --status Implementing
+$ fdev list --local              # Only tasks with local setup
 ```
 
-#### `flovyn-dev pick <task>` - Start Working on a Task
+#### `fdev pick <task>` - Start Working on a Task
 
 Select a task from GitHub Projects and set up local environment:
 
 ```bash
-$ flovyn-dev pick "Webhook retry"
+$ fdev pick "Webhook retry"
 
 Task: Webhook retry
 Current status: Backlog
@@ -248,31 +248,31 @@ Setting up...
 ✓ Created tmux session: webhook-retry (cwd: worktrees/webhook-retry/)
 ✓ Launched Claude Code with initial prompt
 
-To attach: flovyn-dev attach webhook-retry
+To attach: fdev attach webhook-retry
 ```
 
 Or pick by partial match:
 ```bash
-$ flovyn-dev pick webhook      # Matches "Webhook retry"
-$ flovyn-dev pick --interactive # Show picker UI
+$ fdev pick webhook      # Matches "Webhook retry"
+$ fdev pick --interactive # Show picker UI
 ```
 
 #### Untracked Files
 
-Some files are `.gitignore`d but required for development. `flovyn-dev pick` copies these from main branch to the worktree:
+Some files are `.gitignore`d but required for development. `fdev pick` copies these from main branch to the worktree:
 
 | Source | Target | Purpose |
 |--------|--------|---------|
 | `sdk-rust/examples/.env` | `worktrees/{feature}/sdk-rust/examples/.env` | Worker example configuration |
 
-To add more files, update the `UNTRACKED_FILES` list in `flovyn-dev`.
+To add more files, update the `UNTRACKED_FILES` list in `fdev`.
 
-#### `flovyn-dev research <task>` - Start Research Task
+#### `fdev research <task>` - Start Research Task
 
 For exploring feasibility without committing to a full feature. Creates a lightweight setup:
 
 ```bash
-$ flovyn-dev research "Retry strategies"
+$ fdev research "Retry strategies"
 
 Task: Retry strategies
 Kind: Research
@@ -285,7 +285,7 @@ Setting up...
 ✓ Created tmux session: retry-strategies (cwd: worktrees/retry-strategies/)
 ✓ Launched Claude Code with research prompt
 
-To attach: flovyn-dev attach retry-strategies
+To attach: fdev attach retry-strategies
 ```
 
 **Key differences from `pick`:**
@@ -297,16 +297,16 @@ To attach: flovyn-dev attach retry-strategies
 **Research doc output:** `dev/docs/research/YYYYMMDD_topic.md`
 
 **Outcomes:**
-1. **Proceed** → Move to Design, run `flovyn-dev pick` to create full worktree
+1. **Proceed** → Move to Design, run `fdev pick` to create full worktree
 2. **Don't proceed** → Move to Done with "Won't Do" note
 3. **Need more info** → Stay in Research
 
-#### `flovyn-dev move <task> <status>` - Change Task Status
+#### `fdev move <task> <status>` - Change Task Status
 
 Move task through workflow stages (updates both GitHub and local):
 
 ```bash
-$ flovyn-dev move webhook-retry Planning
+$ fdev move webhook-retry Planning
 
 Current: Design → Target: Planning
 
@@ -333,13 +333,13 @@ Status transitions and what they trigger:
 | → Design | Create docs folder, worktree, tmux, launch Claude |
 | → Planning | (none, just status update) |
 | → Implementing | (none, just status update) |
-| → Review | Prompt to run `flovyn-dev pr` |
-| → Done | Prompt to run `flovyn-dev archive` |
+| → Review | Prompt to run `fdev pr` |
+| → Done | Prompt to run `fdev archive` |
 
-#### `flovyn-dev pr <task>` - Create Pull Requests
+#### `fdev pr <task>` - Create Pull Requests
 
 ```bash
-$ flovyn-dev pr webhook-retry
+$ fdev pr webhook-retry
 
 Checking for repos with changes...
   dev/: 2 files changed (design doc, plan)
@@ -392,10 +392,10 @@ https://github.com/flovyn/dev/blob/{branch}/docs/design/{feature}.md
 {Closes #issue if linked}
 ```
 
-#### `flovyn-dev sync` - Reconcile Local ↔ GitHub
+#### `fdev sync` - Reconcile Local ↔ GitHub
 
 ```bash
-$ flovyn-dev sync
+$ fdev sync
 
 Comparing local state with GitHub...
 
@@ -416,10 +416,10 @@ Choice: 1,2
 ✓ Deleted old-feature worktree
 ```
 
-#### `flovyn-dev archive <task>` - Cleanup with Safety Checks
+#### `fdev archive <task>` - Cleanup with Safety Checks
 
 ```bash
-$ flovyn-dev archive webhook-retry
+$ fdev archive webhook-retry
 
 Pre-flight checks...
   Checking Docker environment:
@@ -451,7 +451,7 @@ Archiving...
 
 **If checks fail:**
 ```bash
-$ flovyn-dev archive webhook-retry
+$ fdev archive webhook-retry
 
 Pre-flight checks...
   Checking for uncommitted changes:
@@ -459,18 +459,18 @@ Pre-flight checks...
         modified: src/service/webhook.rs
 
 Error: Cannot archive - uncommitted changes exist.
-Run 'flovyn-dev commit webhook-retry -m "..."' first.
+Run 'fdev commit webhook-retry -m "..."' first.
 ```
 
 ```bash
-$ flovyn-dev archive webhook-retry
+$ fdev archive webhook-retry
 
 Pre-flight checks...
   Checking PRs are merged:
     ✗ flovyn/flovyn-server#43 - OPEN
 
 Error: Cannot archive - PR not merged.
-Merge the PR first, or use 'flovyn-dev delete webhook-retry' to force delete.
+Merge the PR first, or use 'fdev delete webhook-retry' to force delete.
 ```
 
 #### Tmux Session Management
@@ -479,7 +479,7 @@ Each task gets its own tmux session with Claude Code:
 
 ```bash
 # Attach to a task's Claude session
-$ flovyn-dev attach webhook-retry
+$ fdev attach webhook-retry
 
 # If session doesn't exist, creates it:
 #   tmux new-session -d -s webhook-retry -c /home/ubuntu/workspaces/flovyn
@@ -487,7 +487,7 @@ $ flovyn-dev attach webhook-retry
 #   tmux attach -t webhook-retry
 
 # List all active sessions
-$ flovyn-dev list --local
+$ fdev list --local
 
   Task              │ tmux Status    │ Last Activity
   ──────────────────┼────────────────┼──────────────────
@@ -502,7 +502,7 @@ $ flovyn-dev list --local
 
 #### Initial Prompt (on `pick`)
 
-When creating a new tmux session, `flovyn-dev`:
+When creating a new tmux session, `fdev`:
 1. Fetches the GitHub issue content
 2. Starts Claude Code from the worktree
 3. Sends initial prompt with issue content
@@ -534,7 +534,7 @@ Start by exploring the codebase to understand what exists, then write the design
 
 #### Resume Prompt (on `attach`)
 
-When attaching to an existing session, `flovyn-dev attach` sends a resume prompt:
+When attaching to an existing session, `fdev attach` sends a resume prompt:
 
 ```bash
 # If session already exists and Claude is running:
@@ -570,7 +570,7 @@ If no plan exists yet, read dev/docs/design/20260120_webhook_retry.md for contex
 │ ○ sdk-python     (Planning)     - Waiting for review    │
 └─────────────────────────────────────────────────────────┘
 
-$ flovyn-dev attach schedules-ui   # Switch to different task
+$ fdev attach schedules-ui   # Switch to different task
 ```
 
 ### 4. Document Naming Convention
@@ -950,7 +950,7 @@ worktrees/webhook-retry/
 Images are built from worktree source and tagged with the branch name:
 
 ```bash
-# Built by: flovyn-dev build webhook-retry
+# Built by: fdev build webhook-retry
 flovyn-server:webhook-retry
 flovyn-app:webhook-retry
 ```
@@ -1002,7 +1002,7 @@ Port allocation is stored in `~/.flovyn/ports.json`:
 
 #### Generated docker-compose.yml
 
-`flovyn-dev init-env` generates a complete docker-compose.yml for each worktree:
+`fdev init-env` generates a complete docker-compose.yml for each worktree:
 
 ```yaml
 # worktrees/webhook-retry/dev/docker-compose.yml (generated)
@@ -1100,7 +1100,7 @@ volumes:
   postgres-app-data:
 ```
 
-#### Docker Commands in flovyn-dev
+#### Docker Commands in fdev
 
 ```bash
 # ─────────────────────────────────────────────────────────
@@ -1108,40 +1108,40 @@ volumes:
 # ─────────────────────────────────────────────────────────
 
 # Build Docker images from worktree source
-flovyn-dev build <feature>
+fdev build <feature>
 # → docker build -t flovyn-server:webhook-retry worktrees/webhook-retry/flovyn-server
 # → docker build -t flovyn-app:webhook-retry worktrees/webhook-retry/flovyn-app
 
 # Initialize environment (allocate ports, generate docker-compose.yml)
-flovyn-dev init-env <feature>
+fdev init-env <feature>
 # → Allocates ports (stores in ~/.flovyn/ports.json)
 # → Generates worktrees/<feature>/dev/docker-compose.yml
 # → Generates worktrees/<feature>/dev/.env
 
 # Start the Docker environment
-flovyn-dev start <feature>
+fdev start <feature>
 # → cd worktrees/<feature>/dev && docker compose up -d
 
 # Stop the environment
-flovyn-dev stop <feature>
+fdev stop <feature>
 # → cd worktrees/<feature>/dev && docker compose down
 
 # View logs
-flovyn-dev logs <feature> [service]
+fdev logs <feature> [service]
 # → docker compose -f worktrees/<feature>/dev/docker-compose.yml logs -f [service]
 
 # Rebuild and restart (after code changes)
-flovyn-dev rebuild <feature>
-# → flovyn-dev build <feature>
-# → flovyn-dev stop <feature>
-# → flovyn-dev start <feature>
+fdev rebuild <feature>
+# → fdev build <feature>
+# → fdev stop <feature>
+# → fdev start <feature>
 
 # Open in browser
-flovyn-dev open <feature>
+fdev open <feature>
 # → Opens http://localhost:3001 (uses allocated port)
 
 # Show environment info
-flovyn-dev env <feature>
+fdev env <feature>
 # → Server HTTP: http://localhost:8001
 # → Server gRPC: localhost:9091
 # → App: http://localhost:3001
@@ -1152,16 +1152,16 @@ flovyn-dev env <feature>
 
 ```bash
 # 1. Pick a task (creates worktree, docs, tmux)
-$ flovyn-dev pick webhook-retry
+$ fdev pick webhook-retry
 
 # 2. Initialize Docker environment (allocate ports, generate configs)
-$ flovyn-dev init-env webhook-retry
+$ fdev init-env webhook-retry
 ✓ Allocated ports (base offset: 1)
 ✓ Generated worktrees/webhook-retry/dev/docker-compose.yml
 ✓ Generated worktrees/webhook-retry/dev/.env
 
 # 3. Build Docker images from worktree source
-$ flovyn-dev build webhook-retry
+$ fdev build webhook-retry
 Building flovyn-server:webhook-retry...
   → docker build -t flovyn-server:webhook-retry worktrees/webhook-retry/flovyn-server
 Building flovyn-app:webhook-retry...
@@ -1169,13 +1169,13 @@ Building flovyn-app:webhook-retry...
 ✓ Built 2 images
 
 # 4. Start the environment
-$ flovyn-dev start webhook-retry
+$ fdev start webhook-retry
 Starting webhook-retry environment...
   → docker compose -f worktrees/webhook-retry/dev/docker-compose.yml up -d
 ✓ All services running
 
 # 5. Show access URLs
-$ flovyn-dev env webhook-retry
+$ fdev env webhook-retry
 webhook-retry environment:
   App:         http://localhost:3001
   Server HTTP: http://localhost:8001
@@ -1183,23 +1183,23 @@ webhook-retry environment:
   Jaeger:      http://localhost:16687
 
 # 6. After code changes, rebuild
-$ flovyn-dev rebuild webhook-retry
+$ fdev rebuild webhook-retry
 
 # 7. When done, stop
-$ flovyn-dev stop webhook-retry
+$ fdev stop webhook-retry
 ```
 
 #### Running Multiple Features in Parallel
 
 ```bash
 # Terminal 1: Working on webhook-retry
-$ flovyn-dev start webhook-retry
-$ flovyn-dev attach webhook-retry
+$ fdev start webhook-retry
+$ fdev attach webhook-retry
 # App at http://localhost:3001, Server at http://localhost:8001
 
 # Terminal 2: Working on schedules
-$ flovyn-dev start schedules
-$ flovyn-dev attach schedules
+$ fdev start schedules
+$ fdev attach schedules
 # App at http://localhost:3002, Server at http://localhost:8002
 
 # Both running simultaneously with full isolation
@@ -1272,8 +1272,8 @@ gh pr edit <number> --repo flovyn/flovyn-server --add-project "Development"
    - Add custom fields: Branch (text), Docs (text)
 3. Migrate relevant items from old "Roadmap" project
 
-**Phase 3: `flovyn-dev` Implementation**
-1. Create `bin/flovyn-dev` (Python, builds on worktree.py patterns)
+**Phase 3: `fdev` Implementation**
+1. Create `bin/fdev` (Python, builds on worktree.py patterns)
 2. Core commands first:
    - `list` - fetch from GitHub Projects via `gh` CLI
    - `pick` - select task, create local setup (docs, worktree, tmux)
@@ -1285,12 +1285,12 @@ gh pr edit <number> --repo flovyn/flovyn-server --add-project "Development"
    - `sync`, `archive`, `delete`
 
 **Phase 4: Test & Iterate**
-1. Use `flovyn-dev` for next real feature
+1. Use `fdev` for next real feature
 2. Document friction points
 3. Iterate on UX
 
 **Phase 5: Deprecate worktree.py**
-1. Ensure all worktree.py functionality is in flovyn-dev
+1. Ensure all worktree.py functionality is in fdev
 2. Add deprecation notice to worktree.py
 3. Remove after transition period
 
@@ -1341,12 +1341,12 @@ gh pr edit <number> --repo flovyn/flovyn-server --add-project "Development"
    Then configure via web UI: add Status options (Backlog, Design, Planning, Implementing, Review, Done)
 
 ### Next
-5. Implement `flovyn-dev` MVP:
+5. Implement `fdev` MVP:
    - Start with `list` and `pick` commands
    - Add tmux integration
    - Test with real feature
 
 ### Later
 6. Add remaining commands: `move`, `sync`, `pr`, `archive`
-7. Port worktree.py git operations to flovyn-dev
+7. Port worktree.py git operations to fdev
 8. Deprecate worktree.py

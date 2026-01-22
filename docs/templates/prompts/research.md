@@ -21,4 +21,4 @@ When your research is complete, update the research doc with:
 - Next steps
 
 If research leads to implementation, we can convert this to a design doc with:
-  flovyn-dev docs mv $topic research design
+  fdev docs mv $topic research design

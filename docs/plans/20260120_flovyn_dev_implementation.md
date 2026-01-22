@@ -1,4 +1,4 @@
-# flovyn-dev Implementation Plan
+# fdev Implementation Plan
 
 **Date:** 2026-01-20
 **Design:** [20260120_flovyn_dev_workflow.md](../design/20260120_flovyn_dev_workflow.md)
@@ -6,7 +6,7 @@
 
 ## Overview
 
-Incremental implementation of `flovyn-dev` CLI tool. Each milestone is independently usable.
+Incremental implementation of `fdev` CLI tool. Each milestone is independently usable.
 
 ## Conventions
 
@@ -234,14 +234,14 @@ mise run example:hello  # Connects to http://localhost:9091
 
 ## Milestone 1: CLI Foundation + Worktree Management
 
-**Goal:** Replace `worktree.py` with `flovyn-dev` in `dev/bin/`, preserving existing functionality.
+**Goal:** Replace `worktree.py` with `fdev` in `dev/bin/`, preserving existing functionality.
 
 **Status:** ✅ Complete
 
 ### TODO
 
 - [x] **1.1** Create CLI skeleton
-  - [x] Create `dev/bin/flovyn-dev` (Python)
+  - [x] Create `dev/bin/fdev` (Python)
   - [x] Set up argument parsing (argparse)
   - [x] Add `--help` for all commands
   - [x] Make executable (`chmod +x`)
@@ -289,11 +289,11 @@ Offset 2: APP_PORT=3002, SERVER_HTTP_PORT=8002, SERVER_GRPC_PORT=9092, ...
 ### Test
 
 ```bash
-flovyn-dev create test-feature
-flovyn-dev list
-flovyn-dev status test-feature
-flovyn-dev env test-feature
-flovyn-dev delete test-feature
+fdev create test-feature
+fdev list
+fdev status test-feature
+fdev env test-feature
+fdev delete test-feature
 ```
 
 ### Usable After
@@ -321,23 +321,23 @@ Basic worktree management with port isolation from new location.
   - [x] Design doc placed at `features/{feature}/design.md`
   - [x] Supports multiple plan files for phases
 
-- [x] **2.3** Implement `flovyn-dev open <feature> [design|plan]`
+- [x] **2.3** Implement `fdev open <feature> [design|plan]`
   - [x] Find design or plan doc for feature
   - [x] Open in `$EDITOR` (default: vim)
   - [x] Default to design doc, optional `plan` argument for plan doc
   - [x] Interactive selection if multiple docs found
 
-- [x] **2.4** Implement `flovyn-dev docs list <feature>`
+- [x] **2.4** Implement `fdev docs list <feature>`
   - [x] Search all doc directories for files matching feature
   - [x] List design and plan docs with paths
   - [x] Indicate if feature uses large feature structure
 
-- [x] **2.5** Implement `flovyn-dev docs promote <feature>`
+- [x] **2.5** Implement `fdev docs promote <feature>`
   - [x] Convert standard feature to large feature structure
   - [x] Move design doc to `features/{feature}/design.md`
   - [x] Move plan docs to `features/{feature}/plan.md` (or `plan_N.md` if multiple)
 
-- [x] **2.6** Implement `flovyn-dev docs archive <feature>`
+- [x] **2.6** Implement `fdev docs archive <feature>`
   - [x] Create archive folder: `dev/docs/archive/YYYYMMDD_{feature}/`
   - [x] Move design doc → `archive/YYYYMMDD_{feature}/design.md`
   - [x] Move plan doc → `archive/YYYYMMDD_{feature}/plan.md`
@@ -363,20 +363,20 @@ dev/docs/features/{feature}/
 
 ```bash
 # Standard feature
-flovyn-dev create webhook-retry
-flovyn-dev docs list webhook-retry
-flovyn-dev open webhook-retry
+fdev create webhook-retry
+fdev docs list webhook-retry
+fdev open webhook-retry
 
 # Large feature
-flovyn-dev create auth-system --large
-flovyn-dev docs list auth-system
+fdev create auth-system --large
+fdev docs list auth-system
 
 # Promote standard to large
-flovyn-dev docs promote webhook-retry
-flovyn-dev docs list webhook-retry  # Now shows features/ path
+fdev docs promote webhook-retry
+fdev docs list webhook-retry  # Now shows features/ path
 
 # Archive completed feature
-flovyn-dev docs archive old-feature
+fdev docs archive old-feature
 ls dev/docs/archive/  # Should show YYYYMMDD_old-feature/
 ```
 
@@ -409,7 +409,7 @@ Worktrees with auto-generated design docs and doc lifecycle management.
   - [x] Customizable via `docs/templates/prompts/initial.md`
   - [x] Sends via tmux send-keys
 
-- [x] **3.4** Implement `flovyn-dev attach <feature>`
+- [x] **3.4** Implement `fdev attach <feature>`
   - [x] Check if tmux session exists
   - [x] If no session but worktree exists, offer to create session
   - [x] Send resume prompt before attaching (configurable with `--no-resume`)
@@ -424,7 +424,7 @@ Worktrees with auto-generated design docs and doc lifecycle management.
   - [x] Kill tmux session if exists
   - [x] Handles case where session doesn't exist
 
-- [x] **3.7** Add `flovyn-dev sessions`
+- [x] **3.7** Add `fdev sessions`
   - [x] List all flovyn-related tmux sessions
   - [x] Show: feature name, attached/detached, last activity
 
@@ -432,22 +432,22 @@ Worktrees with auto-generated design docs and doc lifecycle management.
 
 ```bash
 # Create with tmux session (default)
-flovyn-dev create webhook-retry
+fdev create webhook-retry
 
 # Create without tmux session
-flovyn-dev create webhook-retry --no-session
+fdev create webhook-retry --no-session
 
 # Attach to session (sends resume prompt)
-flovyn-dev attach webhook-retry
+fdev attach webhook-retry
 
 # Attach without resume prompt
-flovyn-dev attach webhook-retry --no-resume
+fdev attach webhook-retry --no-resume
 
 # List all flovyn sessions
-flovyn-dev sessions
+fdev sessions
 
 # Delete (also kills tmux session)
-flovyn-dev delete webhook-retry
+fdev delete webhook-retry
 ```
 
 ### Prompt Templates
@@ -492,13 +492,13 @@ GitHub Project created:
   - [x] `gh_add_issue_comment()` - Post comment to linked issue
   - [x] `gh_find_item_by_branch()` - Find item by branch name
 
-- [x] **4.2** Implement `flovyn-dev list --remote`
+- [x] **4.2** Implement `fdev list --remote`
   - [x] Fetch items from GitHub Project
   - [x] Group by phase with color coding
   - [x] Show local worktree indicator (●)
   - [x] Support filters: `--phase`, `--kind`
 
-- [x] **4.3** Implement `flovyn-dev pick`
+- [x] **4.3** Implement `fdev pick`
   - [x] Interactive selection (default: `Phase = Backlog`)
   - [x] Get Branch field from item (or generate from title)
   - [x] Run `create` with branch name
@@ -506,7 +506,7 @@ GitHub Project created:
   - [x] Update Phase: Backlog → Design
   - [x] Post comment to linked issue
 
-- [x] **4.4** Implement `flovyn-dev move <feature> <phase>`
+- [x] **4.4** Implement `fdev move <feature> <phase>`
   - [x] Map feature to GitHub item (by branch name)
   - [x] Update GitHub Project item phase
   - [x] Post phase transition comment with doc summaries:
@@ -515,7 +515,7 @@ GitHub Project created:
     - [x] In Progress → Review: Show progress percentage
     - [x] → Done: Mark complete
 
-- [x] **4.5** Implement `flovyn-dev sync`
+- [x] **4.5** Implement `fdev sync`
   - [x] Compare local worktrees with GitHub items
   - [x] Show in-sync items with phase
   - [x] Show local-only (no GitHub item)
@@ -526,22 +526,22 @@ GitHub Project created:
 
 ```bash
 # List remote items
-flovyn-dev list --remote
-flovyn-dev list -r --phase Backlog
-flovyn-dev list -r --kind Feature
+fdev list --remote
+fdev list -r --phase Backlog
+fdev list -r --kind Feature
 
 # Pick from backlog and create worktree
-flovyn-dev pick
-flovyn-dev pick --phase Design
+fdev pick
+fdev pick --phase Design
 
 # Move between phases (updates GitHub and posts summary)
-flovyn-dev move webhook-retry Planning
-flovyn-dev move webhook-retry "In Progress"
-flovyn-dev move webhook-retry Review
+fdev move webhook-retry Planning
+fdev move webhook-retry "In Progress"
+fdev move webhook-retry Review
 
 # Sync local vs remote
-flovyn-dev sync
-flovyn-dev sync --update-progress
+fdev sync
+fdev sync --update-progress
 ```
 
 ### Usable After
@@ -554,7 +554,7 @@ GitHub-driven workflow with bidirectional sync and automatic issue updates.
 
 **Status:** ✅ Complete (integrated into Milestone 1)
 
-**Reason:** With Milestone 0.7 (configurable ports in `dev/.env`), we can run multiple fully isolated instances by allocating different ports for ALL services per worktree. Port allocation was integrated directly into the `flovyn-dev create` command.
+**Reason:** With Milestone 0.7 (configurable ports in `dev/.env`), we can run multiple fully isolated instances by allocating different ports for ALL services per worktree. Port allocation was integrated directly into the `fdev create` command.
 
 **Implementation:**
 - Each worktree gets its own `dev/.env` with unique ports for ALL services
@@ -591,7 +591,7 @@ mise run app     # App:3002
 
 ### TODO
 
-- [x] **5.1** Implement `flovyn-dev research <topic>`
+- [x] **5.1** Implement `fdev research <topic>`
   - [x] Create `worktrees/{topic}/dev/` only (single repo)
   - [x] Create research doc from template (built-in default)
   - [x] Create tmux session
@@ -607,9 +607,9 @@ mise run app     # App:3002
   - [x] Post research start comment to GitHub issue
 
 - [x] **5.4** Handle research → design transition
-  - [x] `flovyn-dev docs mv {topic} research design`
+  - [x] `fdev docs mv {topic} research design`
   - [x] Transforms research doc structure to design doc format
-  - [x] Can then create full worktree with `flovyn-dev create`
+  - [x] Can then create full worktree with `fdev create`
 
 - [x] **5.5** Detect research worktrees
   - [x] `is_research_worktree()` helper (only dev/ exists)
@@ -620,17 +620,17 @@ mise run app     # App:3002
 
 ```bash
 # Create research worktree
-flovyn-dev research retry-strategies
-flovyn-dev research retry-strategies --no-session
+fdev research retry-strategies
+fdev research retry-strategies --no-session
 
 # Pick research tasks from GitHub
-flovyn-dev pick --research
+fdev pick --research
 
 # Convert research to design
-flovyn-dev docs mv retry-strategies research design
+fdev docs mv retry-strategies research design
 
 # List shows research worktrees
-flovyn-dev list  # Shows [research] indicator
+fdev list  # Shows [research] indicator
 ```
 
 ### Research Document Template
@@ -658,7 +658,7 @@ Research workflow for exploration tasks without full multi-repo worktree overhea
 
 ### TODO
 
-- [x] **6.1** Implement `flovyn-dev pr <feature>`
+- [x] **6.1** Implement `fdev pr <feature>`
   - [x] Detect repos with uncommitted changes (warn)
   - [x] Detect repos with commits not on main
   - [x] Push branches to origin
@@ -673,14 +673,14 @@ Research workflow for exploration tasks without full multi-repo worktree overhea
   - [x] Create PR via `gh pr create`
   - [x] Post PR links to GitHub Project issue
 
-- [x] **6.3** Implement `flovyn-dev archive <feature>` pre-flight checks
+- [x] **6.3** Implement `fdev archive <feature>` pre-flight checks
   - [x] Check for uncommitted changes (block if dirty)
   - [x] Check all PRs are merged (block if OPEN state)
   - [x] Show clear error messages
   - [x] Confirmation prompt before archiving
 
 - [x] **6.4** Implement archive cleanup
-  - [x] Archive docs (`flovyn-dev docs archive`)
+  - [x] Archive docs (`fdev docs archive`)
   - [x] Kill tmux session
   - [x] Update GitHub Project status: → Done
   - [x] Post completion comment to issue
@@ -694,13 +694,13 @@ Research workflow for exploration tasks without full multi-repo worktree overhea
 
 ```bash
 # Create PRs for all repos with changes
-flovyn-dev pr webhook-retry
+fdev pr webhook-retry
 
 # Archive after PRs merged (with checks)
-flovyn-dev archive webhook-retry
+fdev archive webhook-retry
 
 # Force archive without checks (for abandoned features)
-flovyn-dev archive webhook-retry --force
+fdev archive webhook-retry --force
 ```
 
 ### PR Template
@@ -743,7 +743,7 @@ Port allocation (formerly M5) was integrated into M1 (worktree create).
 
 **Completed:** 2026-01-21
 
-All milestones implemented. The `flovyn-dev` CLI now provides a complete end-to-end workflow:
+All milestones implemented. The `fdev` CLI now provides a complete end-to-end workflow:
 
 1. **Create feature** (`create` or `pick` from GitHub Backlog)
 2. **Research** (`research` for exploration-only tasks)

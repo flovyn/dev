@@ -1,10 +1,10 @@
-# flovyn-dev Workflow Guide
+# fdev Workflow Guide
 
-This guide describes the complete development workflow using `flovyn-dev` for managing features across the Flovyn multi-repo workspace.
+This guide describes the complete development workflow using `fdev` for managing features across the Flovyn multi-repo workspace.
 
 ## Overview
 
-`flovyn-dev` manages the full lifecycle of a feature:
+`fdev` manages the full lifecycle of a feature:
 
 ```
 Backlog → Design → Planning → In Progress → Review → Done
@@ -20,16 +20,16 @@ Each feature gets:
 
 | Command | Description |
 |---------|-------------|
-| `flovyn-dev pick` | Pick from GitHub Backlog and create worktree |
-| `flovyn-dev create <feature>` | Create worktree manually |
-| `flovyn-dev research <topic>` | Create research-only worktree |
-| `flovyn-dev attach <feature>` | Attach to tmux session |
-| `flovyn-dev move <feature> <phase>` | Move to new phase |
-| `flovyn-dev pr <feature>` | Create PRs across repos |
-| `flovyn-dev archive <feature>` | Cleanup after merge |
-| `flovyn-dev list` | List local worktrees |
-| `flovyn-dev list --remote` | List GitHub Project items |
-| `flovyn-dev sync` | Compare local vs GitHub |
+| `fdev pick` | Pick from GitHub Backlog and create worktree |
+| `fdev create <feature>` | Create worktree manually |
+| `fdev research <topic>` | Create research-only worktree |
+| `fdev attach <feature>` | Attach to tmux session |
+| `fdev move <feature> <phase>` | Move to new phase |
+| `fdev pr <feature>` | Create PRs across repos |
+| `fdev archive <feature>` | Cleanup after merge |
+| `fdev list` | List local worktrees |
+| `fdev list --remote` | List GitHub Project items |
+| `fdev sync` | Compare local vs GitHub |
 
 ---
 
@@ -41,10 +41,10 @@ If the feature is already in the GitHub Project backlog:
 
 ```bash
 # List available items in Backlog
-flovyn-dev list --remote --phase Backlog
+fdev list --remote --phase Backlog
 
 # Pick interactively and create worktree
-flovyn-dev pick
+fdev pick
 ```
 
 This will:
@@ -62,13 +62,13 @@ For features not yet in GitHub:
 
 ```bash
 # Standard feature
-flovyn-dev create webhook-retry
+fdev create webhook-retry
 
 # Large feature (uses subdirectory for docs)
-flovyn-dev create auth-system --large
+fdev create auth-system --large
 
 # Without tmux session
-flovyn-dev create webhook-retry --no-session
+fdev create webhook-retry --no-session
 ```
 
 ---
@@ -79,10 +79,10 @@ For exploration tasks that don't need full multi-repo worktrees:
 
 ```bash
 # Create research worktree (dev/ only)
-flovyn-dev research retry-strategies
+fdev research retry-strategies
 
 # Or pick Research items from GitHub
-flovyn-dev pick --research
+fdev pick --research
 ```
 
 Research worktrees:
@@ -94,10 +94,10 @@ When research leads to implementation:
 
 ```bash
 # Convert research doc to design doc
-flovyn-dev docs mv retry-strategies research design
+fdev docs mv retry-strategies research design
 
 # Create full worktree
-flovyn-dev create retry-strategies
+fdev create retry-strategies
 ```
 
 ---
@@ -108,43 +108,43 @@ flovyn-dev create retry-strategies
 
 ```bash
 # Attach with resume prompt (default)
-flovyn-dev attach webhook-retry
+fdev attach webhook-retry
 
 # Attach without resume prompt
-flovyn-dev attach webhook-retry --no-resume
+fdev attach webhook-retry --no-resume
 ```
 
 ### Check Status
 
 ```bash
 # Git status across all repos
-flovyn-dev status webhook-retry
+fdev status webhook-retry
 
 # Show allocated ports
-flovyn-dev env webhook-retry
+fdev env webhook-retry
 
 # List all sessions
-flovyn-dev sessions
+fdev sessions
 ```
 
 ### Work with Docs
 
 ```bash
 # Open design doc in $EDITOR
-flovyn-dev open webhook-retry
+fdev open webhook-retry
 
 # Open plan doc
-flovyn-dev open webhook-retry plan
+fdev open webhook-retry plan
 
 # List all docs for feature
-flovyn-dev docs list webhook-retry
+fdev docs list webhook-retry
 ```
 
 ### Commit Changes
 
 ```bash
 # Commit across all repos with same message
-flovyn-dev commit webhook-retry -m "feat: implement retry logic"
+fdev commit webhook-retry -m "feat: implement retry logic"
 ```
 
 ---
@@ -155,19 +155,19 @@ Update the GitHub Project status and post summaries:
 
 ```bash
 # Design complete, ready for planning
-flovyn-dev move webhook-retry Planning
+fdev move webhook-retry Planning
 # Posts: Problem Statement + Solution from design doc
 
 # Planning complete, start implementation
-flovyn-dev move webhook-retry "In Progress"
+fdev move webhook-retry "In Progress"
 # Posts: TODO list from plan doc
 
 # Implementation complete, ready for review
-flovyn-dev move webhook-retry Review
+fdev move webhook-retry Review
 # Posts: Progress percentage
 
 # Feature complete
-flovyn-dev move webhook-retry Done
+fdev move webhook-retry Done
 # Posts: Completion marker
 ```
 
@@ -178,7 +178,7 @@ flovyn-dev move webhook-retry Done
 When implementation is complete:
 
 ```bash
-flovyn-dev pr webhook-retry
+fdev pr webhook-retry
 ```
 
 This will:
@@ -198,7 +198,7 @@ This will:
 After PRs are merged:
 
 ```bash
-flovyn-dev archive webhook-retry
+fdev archive webhook-retry
 ```
 
 Pre-flight checks:
@@ -214,7 +214,7 @@ Then:
 For abandoned features:
 
 ```bash
-flovyn-dev archive webhook-retry --force
+fdev archive webhook-retry --force
 ```
 
 ---
@@ -236,7 +236,7 @@ Each worktree gets unique ports (offset from base):
 View allocated ports:
 
 ```bash
-flovyn-dev env webhook-retry
+fdev env webhook-retry
 ```
 
 ---
@@ -247,25 +247,25 @@ flovyn-dev env webhook-retry
 
 ```bash
 # All items grouped by phase
-flovyn-dev list --remote
+fdev list --remote
 
 # Filter by phase
-flovyn-dev list -r --phase Backlog
-flovyn-dev list -r --phase "In Progress"
+fdev list -r --phase Backlog
+fdev list -r --phase "In Progress"
 
 # Filter by kind
-flovyn-dev list -r --kind Feature
-flovyn-dev list -r --kind Research
+fdev list -r --kind Feature
+fdev list -r --kind Research
 ```
 
 ### Syncing
 
 ```bash
 # Compare local vs GitHub
-flovyn-dev sync
+fdev sync
 
 # Post progress updates for In Progress items
-flovyn-dev sync --update-progress
+fdev sync --update-progress
 ```
 
 ---
@@ -317,7 +317,7 @@ flovyn/
 │       ├── flovyn-app/
 │       └── sdk-*/
 ├── dev/                        # Main dev repo
-│   ├── bin/flovyn-dev          # CLI tool
+│   ├── bin/fdev          # CLI tool
 │   └── docs/
 │       ├── design/
 │       ├── plans/
@@ -345,43 +345,43 @@ Placeholders: `{feature}`, `{design_path}`, `{plan_path}`, `{docs_info}`, `{topi
 
 ```bash
 # 1. Start new feature from GitHub Backlog
-flovyn-dev pick
+fdev pick
 # Select "Add webhook retry logic"
 # → Creates worktrees, design doc, tmux session
 
 # 2. Work on design
-flovyn-dev attach webhook-retry
+fdev attach webhook-retry
 # Claude reads design doc, asks clarifying questions
 # Update design doc with requirements
 
 # 3. Move to planning
-flovyn-dev move webhook-retry Planning
+fdev move webhook-retry Planning
 # → Posts design summary to GitHub issue
 
 # 4. Create implementation plan
-flovyn-dev open webhook-retry plan
+fdev open webhook-retry plan
 # Define TODO items
 
 # 5. Start implementation
-flovyn-dev move webhook-retry "In Progress"
+fdev move webhook-retry "In Progress"
 # → Posts TODO list to GitHub issue
 
 # 6. Implement (Claude works through TODOs)
 # ...coding...
 
 # 7. Commit changes
-flovyn-dev commit webhook-retry -m "feat: add webhook retry with exponential backoff"
+fdev commit webhook-retry -m "feat: add webhook retry with exponential backoff"
 
 # 8. Ready for review
-flovyn-dev move webhook-retry Review
+fdev move webhook-retry Review
 # → Posts progress to GitHub issue
 
 # 9. Create PRs
-flovyn-dev pr webhook-retry
+fdev pr webhook-retry
 # → Pushes branches, creates PRs, posts links to issue
 
 # 10. After PRs merged
-flovyn-dev archive webhook-retry
+fdev archive webhook-retry
 # → Archives docs, kills session, removes worktrees, marks Done
 ```
 
@@ -392,14 +392,14 @@ flovyn-dev archive webhook-retry
 ### Worktree already exists
 
 ```bash
-flovyn-dev delete feature-name
+fdev delete feature-name
 # Then create again
 ```
 
 ### No tmux session
 
 ```bash
-flovyn-dev attach feature-name
+fdev attach feature-name
 # Will offer to create session if worktree exists
 ```
 
@@ -417,6 +417,6 @@ gh auth login
 Check what's using ports:
 
 ```bash
-flovyn-dev env feature-name
+fdev env feature-name
 lsof -i :3001
 ```
