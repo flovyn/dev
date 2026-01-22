@@ -285,6 +285,54 @@ def list_all_worktrees() -> list[str]:
     ])
 
 
+def delete_worktree(feature: str, force: bool = False, delete_branches: bool = False) -> None:
+    """Delete worktrees for a feature.
+
+    Args:
+        feature: Feature name
+        force: Force delete even with uncommitted changes
+        delete_branches: Also delete local branches
+    """
+    if not worktree_exists(feature):
+        raise ValueError(f"Worktree '{feature}' does not exist")
+
+    worktree_path = WORKTREES_DIR / feature
+
+    # Remove worktrees for each repo
+    for repo in REPOS:
+        repo_path = FLOVYN_ROOT / repo
+        target_path = worktree_path / repo
+
+        if not target_path.exists():
+            continue
+
+        try:
+            run_git(repo_path, "worktree", "remove", str(target_path), "--force" if force else None)
+        except subprocess.CalledProcessError:
+            # Try to remove manually if git worktree fails
+            shutil.rmtree(target_path)
+            run_git(repo_path, "worktree", "prune", check=False)
+
+    # Remove worktree directory if empty
+    try:
+        worktree_path.rmdir()
+    except OSError:
+        # Not empty, try to remove remaining files
+        shutil.rmtree(worktree_path, ignore_errors=True)
+
+    # Delete branches (optional)
+    if delete_branches:
+        for repo in REPOS:
+            repo_path = FLOVYN_ROOT / repo
+            if not repo_path.exists():
+                continue
+            run_git(repo_path, "branch", "-d", feature, capture=True, check=False)
+
+    # Kill tmux session if exists
+    if tmux_session_exists(feature):
+        tmux_kill_session(feature)
+
+
 # =============================================================================
 # Documentation Helpers
 # =============================================================================
@@ -1967,6 +2015,12 @@ def cmd_move(args: argparse.Namespace) -> int:
             for repo, url in created_prs:
                 print(f"  - {repo}: {url}")
 
+    # Merge PRs and update main when moving to Done
+    if new_status == "Done":
+        print()
+        print(colored("Completing feature...", Colors.YELLOW))
+        merge_and_cleanup_feature(feature)
+
     return 0
 
 
@@ -2305,6 +2359,100 @@ def create_prs_for_feature(feature: str, update_issue: bool = True) -> list[tupl
             print(colored(f"Warning: Could not update GitHub issue: {e}", Colors.YELLOW))
 
     return created_prs
+
+
+def merge_and_cleanup_feature(feature: str) -> None:
+    """Merge PRs for a feature and update main branches.
+
+    1. Find all open PRs for the feature
+    2. Merge them (squash merge)
+    3. Update main branches in main repos
+    4. Offer to clean up worktree
+    """
+    repos = get_worktree_repos(feature) if worktree_exists(feature) else REPOS
+
+    # Phase 1: Find and merge PRs
+    merged_prs = []
+    failed_prs = []
+
+    print(colored("Merging PRs...", Colors.CYAN))
+    for repo in repos:
+        # Check if PR exists for this branch
+        result = subprocess.run(
+            ["gh", "pr", "view", feature, "--repo", f"flovyn/{repo}", "--json", "url,state,mergeable"],
+            capture_output=True, text=True, check=False
+        )
+        if result.returncode != 0:
+            continue  # No PR for this repo
+
+        try:
+            pr_data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            continue
+
+        pr_url = pr_data.get("url", "")
+        state = pr_data.get("state", "")
+
+        if state == "MERGED":
+            print(f"  {repo}: Already merged")
+            merged_prs.append(repo)
+            continue
+
+        if state != "OPEN":
+            print(f"  {repo}: PR is {state}, skipping")
+            continue
+
+        # Merge the PR (squash)
+        print(f"  {repo}: Merging...", end=" ")
+        merge_result = subprocess.run(
+            ["gh", "pr", "merge", feature, "--repo", f"flovyn/{repo}", "--squash", "--delete-branch"],
+            capture_output=True, text=True, check=False
+        )
+        if merge_result.returncode == 0:
+            print(colored("✓", Colors.GREEN))
+            merged_prs.append(repo)
+        else:
+            print(colored(f"✗ {merge_result.stderr.strip()}", Colors.RED))
+            failed_prs.append((repo, merge_result.stderr.strip()))
+
+    if failed_prs:
+        print()
+        print(colored("Some PRs failed to merge:", Colors.YELLOW))
+        for repo, error in failed_prs:
+            print(f"  - {repo}: {error}")
+
+    # Phase 2: Update main branches in main repos
+    if merged_prs:
+        print()
+        print(colored("Updating main branches...", Colors.CYAN))
+        for repo in merged_prs:
+            main_repo_path = WORKSPACE_ROOT / repo
+            if not main_repo_path.exists():
+                continue
+
+            print(f"  {repo}...", end=" ")
+            try:
+                # Fetch and pull main
+                run_git(main_repo_path, "fetch", "origin", "main")
+                run_git(main_repo_path, "checkout", "main")
+                run_git(main_repo_path, "pull", "origin", "main")
+                print(colored("✓", Colors.GREEN))
+            except subprocess.CalledProcessError as e:
+                print(colored(f"✗ {e}", Colors.RED))
+
+    # Phase 3: Offer to clean up worktree
+    if worktree_exists(feature) and merged_prs:
+        print()
+        response = input(f"Delete worktree '{feature}'? [y/N] ").strip().lower()
+        if response == "y":
+            print(f"Cleaning up worktree...", end=" ")
+            try:
+                delete_worktree(feature)
+                print(colored("✓", Colors.GREEN))
+            except Exception as e:
+                print(colored(f"✗ {e}", Colors.RED))
+        else:
+            print(f"Worktree kept. Delete later with: fdev delete {feature}")
 
 
 def cmd_push(args: argparse.Namespace) -> int:
