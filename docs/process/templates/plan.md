@@ -9,7 +9,7 @@
 
 Commit after completing each phase:
 ```bash
-flovyn-dev commit {feature} -m "Phase N: description"
+fdev commit {feature} -m "Phase N: description"
 ```
 
 Push when ready for backup or review:

@@ -1,0 +1,2935 @@
+#!/usr/bin/env python3
+"""
+fdev - Development workflow manager for Flovyn
+
+Manages worktrees across multiple repos with isolated port allocation.
+Each worktree gets its own set of ports for all services.
+"""
+
+import argparse
+import json
+import os
+import re
+import shlex
+import shutil
+import string
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
+from typing import Optional
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+# Repository root (parent of dev/)
+FLOVYN_ROOT = Path(__file__).resolve().parent.parent.parent
+WORKTREES_DIR = FLOVYN_ROOT / "worktrees"
+
+# Repositories to manage
+REPOS = [
+    "dev",
+    "flovyn-server",
+    "flovyn-app",
+    "sdk-rust",
+    "sdk-kotlin",
+    "sdk-python",
+]
+
+# Base ports (offset 0 = main branch)
+BASE_PORTS = {
+    "APP_PORT": 3000,
+    "SERVER_HTTP_PORT": 8000,
+    "SERVER_GRPC_PORT": 9090,
+    "SERVER_POSTGRES_PORT": 5435,
+    "APP_POSTGRES_PORT": 5433,
+    "NATS_PORT": 4222,
+    "NATS_MONITOR_PORT": 8222,
+    "JAEGER_UI_PORT": 16686,
+    "JAEGER_OTLP_GRPC_PORT": 4317,
+    "JAEGER_OTLP_HTTP_PORT": 4318,
+}
+
+# Files to copy from main to worktree (gitignored but needed)
+UNTRACKED_FILES = [
+    # "sdk-rust/examples/.env",  # Add files here if needed
+]
+
+# Documentation directories (relative to dev/) - defaults to main branch
+_MAIN_DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
+TEMPLATES_DIR = _MAIN_DOCS_DIR / "templates"
+
+# Prompt templates directory (always from main, not worktree)
+PROMPTS_DIR = _MAIN_DOCS_DIR / "templates" / "prompts"
+
+
+def detect_feature() -> Optional[str]:
+    """Detect feature name from current working directory if inside a worktree."""
+    cwd = Path.cwd().resolve()
+    if WORKTREES_DIR in cwd.parents or cwd == WORKTREES_DIR:
+        parts = cwd.parts
+        try:
+            wt_idx = parts.index(WORKTREES_DIR.name)
+            if wt_idx + 1 < len(parts):
+                return parts[wt_idx + 1]
+        except (ValueError, IndexError):
+            pass
+    return None
+
+
+def get_feature(args: argparse.Namespace, required: bool = True) -> Optional[str]:
+    """Get feature from args or detect from cwd. Exits if required and not found."""
+    feature = getattr(args, 'feature', None)
+    if not feature:
+        feature = detect_feature()
+    if required and not feature:
+        print(colored("Error: No feature specified and not in a worktree directory.", Colors.RED))
+        print("Either specify a feature or run from within a worktree.")
+        sys.exit(1)
+    return feature
+
+
+def get_docs_dir() -> Path:
+    """Get the docs directory, preferring worktree if we're inside one."""
+    cwd = Path.cwd().resolve()
+    # Check if we're inside a worktree
+    if WORKTREES_DIR in cwd.parents or cwd == WORKTREES_DIR:
+        # Extract worktree path - find the worktree root
+        parts = cwd.parts
+        try:
+            wt_idx = parts.index(WORKTREES_DIR.name)
+            if wt_idx + 1 < len(parts):
+                worktree_docs = WORKTREES_DIR / parts[wt_idx + 1] / "dev" / "docs"
+                if worktree_docs.exists():
+                    return worktree_docs
+        except (ValueError, IndexError):
+            pass
+    return _MAIN_DOCS_DIR
+
+
+# Keep static references pointing to main branch (for templates, creation)
+DOCS_DIR = _MAIN_DOCS_DIR
+DESIGN_DIR = _MAIN_DOCS_DIR / "design"
+PLANS_DIR = _MAIN_DOCS_DIR / "plans"
+RESEARCH_DIR = _MAIN_DOCS_DIR / "research"
+FEATURES_DIR = _MAIN_DOCS_DIR / "features"
+ARCHIVE_DIR = _MAIN_DOCS_DIR / "archive"
+
+# GitHub Project configuration
+GITHUB_ORG = "flovyn"
+GITHUB_PROJECT_NUMBER = 3
+
+# Colors for terminal output
+class Colors:
+    RED = "\033[0;31m"
+    GREEN = "\033[0;32m"
+    YELLOW = "\033[1;33m"
+    BLUE = "\033[0;34m"
+    CYAN = "\033[0;36m"
+    NC = "\033[0m"  # No Color
+
+
+def colored(text: str, color: str) -> str:
+    """Return colored text if stdout is a tty."""
+    if sys.stdout.isatty():
+        return f"{color}{text}{Colors.NC}"
+    return text
+
+
+def load_template(template_path: Path, fallback: Optional[str] = None) -> string.Template:
+    """Load a template file and return a string.Template object."""
+    if template_path.exists():
+        return string.Template(template_path.read_text())
+    if fallback is not None:
+        return string.Template(fallback)
+    raise FileNotFoundError(f"Template not found: {template_path}")
+
+
+# =============================================================================
+# Port Allocation (reads from .env files)
+# =============================================================================
+
+@dataclass
+class PortAllocation:
+    offset: int
+    ports: dict[str, int]
+
+
+def parse_env_file(env_path: Path) -> dict[str, str]:
+    """Parse a .env file and return key-value pairs."""
+    if not env_path.exists():
+        return {}
+
+    result = {}
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, _, value = line.partition("=")
+                result[key.strip()] = value.strip()
+    return result
+
+
+def get_ports_from_env(feature: str) -> Optional[PortAllocation]:
+    """Get ports by reading the worktree's .env file."""
+    env_path = WORKTREES_DIR / feature / "dev" / ".env"
+    if not env_path.exists():
+        return None
+
+    env_vars = parse_env_file(env_path)
+
+    ports = {}
+    for port_name in BASE_PORTS:
+        if port_name in env_vars:
+            try:
+                ports[port_name] = int(env_vars[port_name])
+            except ValueError:
+                pass
+
+    if not ports:
+        return None
+
+    # Calculate offset from APP_PORT
+    offset = ports.get("APP_PORT", BASE_PORTS["APP_PORT"]) - BASE_PORTS["APP_PORT"]
+
+    return PortAllocation(offset=offset, ports=ports)
+
+
+def get_next_offset() -> int:
+    """Calculate next available offset by scanning existing worktrees."""
+    max_offset = 0
+
+    for feature in list_all_worktrees():
+        allocation = get_ports_from_env(feature)
+        if allocation and allocation.offset > max_offset:
+            max_offset = allocation.offset
+
+    return max_offset + 1
+
+
+def allocate_ports(feature: str) -> PortAllocation:
+    """Allocate ports for a new feature."""
+    # Check if already allocated
+    existing = get_ports_from_env(feature)
+    if existing:
+        return existing
+
+    offset = get_next_offset()
+    ports = {name: base + offset for name, base in BASE_PORTS.items()}
+
+    return PortAllocation(offset=offset, ports=ports)
+
+
+# =============================================================================
+# .env Generation
+# =============================================================================
+
+def generate_env_content(feature: str, ports: dict[str, int]) -> str:
+    """Generate .env file content for a worktree."""
+    template = load_template(TEMPLATES_DIR / "env.template")
+    return template.substitute(
+        feature=feature,
+        app_port=ports['APP_PORT'],
+        server_http_port=ports['SERVER_HTTP_PORT'],
+        server_grpc_port=ports['SERVER_GRPC_PORT'],
+        server_postgres_port=ports['SERVER_POSTGRES_PORT'],
+        app_postgres_port=ports['APP_POSTGRES_PORT'],
+        nats_port=ports['NATS_PORT'],
+        nats_monitor_port=ports['NATS_MONITOR_PORT'],
+        jaeger_ui_port=ports['JAEGER_UI_PORT'],
+        jaeger_otlp_grpc_port=ports['JAEGER_OTLP_GRPC_PORT'],
+        jaeger_otlp_http_port=ports['JAEGER_OTLP_HTTP_PORT'],
+    )
+
+
+# =============================================================================
+# Git/Worktree Operations
+# =============================================================================
+
+def run_git(repo_path: Path, *args, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
+    """Run a git command in the specified repo."""
+    cmd = ["git", "-C", str(repo_path)] + list(args)
+    return subprocess.run(
+        cmd,
+        check=check,
+        capture_output=capture,
+        text=True,
+    )
+
+
+def worktree_exists(feature: str) -> bool:
+    """Check if worktree directory exists."""
+    return (WORKTREES_DIR / feature).exists()
+
+
+def get_worktree_repos(feature: str) -> list[str]:
+    """Get list of repos that have worktrees for this feature."""
+    worktree_path = WORKTREES_DIR / feature
+    if not worktree_path.exists():
+        return []
+    return [r for r in REPOS if (worktree_path / r).exists()]
+
+
+def list_all_worktrees() -> list[str]:
+    """List all feature worktrees."""
+    if not WORKTREES_DIR.exists():
+        return []
+    return sorted([
+        d.name for d in WORKTREES_DIR.iterdir()
+        if d.is_dir() and not d.name.startswith(".")
+    ])
+
+
+def delete_worktree(feature: str, force: bool = False, delete_branches: bool = False) -> None:
+    """Delete worktrees for a feature.
+
+    Args:
+        feature: Feature name
+        force: Force delete even with uncommitted changes
+        delete_branches: Also delete local branches
+    """
+    if not worktree_exists(feature):
+        raise ValueError(f"Worktree '{feature}' does not exist")
+
+    worktree_path = WORKTREES_DIR / feature
+
+    # Remove worktrees for each repo
+    for repo in REPOS:
+        repo_path = FLOVYN_ROOT / repo
+        target_path = worktree_path / repo
+
+        if not target_path.exists():
+            continue
+
+        try:
+            if force:
+                run_git(repo_path, "worktree", "remove", str(target_path), "--force")
+            else:
+                run_git(repo_path, "worktree", "remove", str(target_path))
+        except subprocess.CalledProcessError:
+            # Try to remove manually if git worktree fails
+            shutil.rmtree(target_path)
+            run_git(repo_path, "worktree", "prune", check=False)
+
+    # Remove worktree directory if empty
+    try:
+        worktree_path.rmdir()
+    except OSError:
+        # Not empty, try to remove remaining files
+        shutil.rmtree(worktree_path, ignore_errors=True)
+
+    # Delete branches (optional)
+    if delete_branches:
+        for repo in REPOS:
+            repo_path = FLOVYN_ROOT / repo
+            if not repo_path.exists():
+                continue
+            run_git(repo_path, "branch", "-d", feature, capture=True, check=False)
+
+    # Kill tmux session if exists
+    if tmux_session_exists(feature):
+        tmux_kill_session(feature)
+
+
+# =============================================================================
+# Documentation Helpers
+# =============================================================================
+
+def feature_to_title(feature: str) -> str:
+    """Convert feature slug to title case."""
+    return feature.replace("-", " ").replace("_", " ").title()
+
+
+def get_date_prefix() -> str:
+    """Get today's date as YYYYMMDD prefix."""
+    return date.today().strftime("%Y%m%d")
+
+
+def is_large_feature(feature: str) -> bool:
+    """Check if feature uses large feature structure (subdirectory)."""
+    return (FEATURES_DIR / feature).exists()
+
+
+def find_feature_docs(feature: str, worktree: Optional[str] = None) -> dict[str, list[Path]]:
+    """Find all docs for a feature. Returns dict with 'design', 'plan' keys.
+
+    Args:
+        feature: Feature name to search for
+        worktree: If specified, look in this worktree's docs instead of using cwd detection
+    """
+    docs = {"design": [], "plan": []}
+
+    # Get docs directory - explicit worktree or context-aware
+    if worktree:
+        docs_dir = WORKTREES_DIR / worktree / "dev" / "docs"
+        if not docs_dir.exists():
+            docs_dir = get_docs_dir()
+    else:
+        docs_dir = get_docs_dir()
+    design_dir = docs_dir / "design"
+    plans_dir = docs_dir / "plans"
+    features_dir = docs_dir / "features"
+
+    # Check large feature structure first
+    feature_dir = features_dir / feature
+    if feature_dir.exists():
+        for f in feature_dir.iterdir():
+            if f.suffix == ".md":
+                if f.stem == "design" or f.stem.startswith("design"):
+                    docs["design"].append(f)
+                elif f.stem == "plan" or f.stem.startswith("plan"):
+                    docs["plan"].append(f)
+        return docs
+
+    # Normalize feature name for matching (handle both dashes and underscores)
+    feature_normalized = feature.replace("-", "_")
+
+    # Check standard structure (files with feature name)
+    # Pattern: YYYYMMDD_{feature}.md or {feature}.md
+    if design_dir.exists():
+        for f in design_dir.iterdir():
+            if f.suffix == ".md":
+                stem_normalized = f.stem.replace("-", "_")
+                if feature_normalized in stem_normalized:
+                    docs["design"].append(f)
+
+    if plans_dir.exists():
+        for f in plans_dir.iterdir():
+            if f.suffix == ".md":
+                stem_normalized = f.stem.replace("-", "_")
+                if feature_normalized in stem_normalized:
+                    docs["plan"].append(f)
+
+    return docs
+
+
+def create_design_doc(feature: str, large: bool = False, issue_repo: Optional[str] = None, issue_number: Optional[int] = None) -> Optional[Path]:
+    """Create design doc from template. Returns path to created doc."""
+    template_path = TEMPLATES_DIR / "design.md"
+    if not template_path.exists():
+        return None
+
+    template = template_path.read_text()
+
+    # Replace placeholders
+    title = feature_to_title(feature)
+    date_str = date.today().strftime("%Y-%m-%d")
+    date_prefix = get_date_prefix()
+
+    # Fetch issue info if available
+    issue_link = ""
+    issue_body = "<!-- Describe the context and background for this feature -->"
+    if issue_repo and issue_number:
+        issue_url = f"https://github.com/{issue_repo}/issues/{issue_number}"
+        issue_link = f"\n**Issue:** [{issue_repo}#{issue_number}]({issue_url})\n"
+        try:
+            body = gh_get_issue_body(issue_repo, issue_number)
+            # Strip the flovyn tracking section if present
+            if FLOVYN_TRACKING_MARKER in body:
+                body = body[:body.find(FLOVYN_TRACKING_MARKER)].rstrip()
+            if body:
+                issue_body = body
+        except Exception:
+            pass  # Keep default placeholder
+
+    content = template.replace("{Feature Title}", title)
+    content = content.replace("{DATE}", date_str)
+    content = content.replace("{feature}", feature)
+    content = content.replace("{issue_link}", issue_link)
+    content = content.replace("{issue_body}", issue_body)
+
+    if large:
+        # Large feature: create subdirectory
+        feature_dir = FEATURES_DIR / feature
+        feature_dir.mkdir(parents=True, exist_ok=True)
+        doc_path = feature_dir / "design.md"
+    else:
+        # Standard feature: single file with date prefix
+        doc_path = DESIGN_DIR / f"{date_prefix}_{feature.replace('-', '_')}.md"
+
+    doc_path.write_text(content)
+    return doc_path
+
+
+def create_plan_doc(feature: str, large: bool = False, phase: Optional[str] = None) -> Optional[Path]:
+    """Create plan doc from template. Returns path to created doc."""
+    template_path = TEMPLATES_DIR / "plan.md"
+    if not template_path.exists():
+        return None
+
+    template = template_path.read_text()
+
+    # Replace placeholders
+    title = feature_to_title(feature)
+    date_str = date.today().strftime("%Y-%m-%d")
+    date_prefix = get_date_prefix()
+    design_file = f"{date_prefix}_{feature.replace('-', '_')}.md"
+
+    content = template.replace("{Feature Title}", title)
+    content = content.replace("{DATE}", date_str)
+    content = content.replace("{DESIGN_FILE}", design_file if not large else "../design.md")
+    content = content.replace("{Phase Name}", phase or "Initial")
+
+    if large:
+        # Large feature: create in subdirectory
+        feature_dir = FEATURES_DIR / feature
+        feature_dir.mkdir(parents=True, exist_ok=True)
+        if phase:
+            doc_path = feature_dir / f"plan_{phase.lower().replace(' ', '_')}.md"
+        else:
+            doc_path = feature_dir / "plan.md"
+    else:
+        # Standard feature: single file with date prefix
+        doc_path = PLANS_DIR / f"{date_prefix}_{feature.replace('-', '_')}.md"
+
+    doc_path.write_text(content)
+    return doc_path
+
+
+def create_research_doc(topic: str) -> Optional[Path]:
+    """Create research doc from template. Returns path to created doc."""
+    template = load_template(TEMPLATES_DIR / "research.md")
+
+    title = feature_to_title(topic)
+    date_str = date.today().strftime("%Y-%m-%d")
+    date_prefix = get_date_prefix()
+
+    content = template.safe_substitute(
+        title=title,
+        date=date_str,
+        topic=topic,
+    )
+
+    # Research docs go in research/ directory
+    RESEARCH_DIR.mkdir(parents=True, exist_ok=True)
+    doc_path = RESEARCH_DIR / f"{date_prefix}_{topic.replace('-', '_')}.md"
+
+    doc_path.write_text(content)
+    return doc_path
+
+
+def is_research_worktree(feature: str) -> bool:
+    """Check if worktree is research-only (only dev/ repo)."""
+    worktree_path = WORKTREES_DIR / feature
+    if not worktree_path.exists():
+        return False
+
+    repos = get_worktree_repos(feature)
+    return repos == ["dev"]
+
+
+def find_research_doc(topic: str) -> Optional[Path]:
+    """Find research doc for a topic."""
+    topic_normalized = topic.replace("-", "_")
+
+    if RESEARCH_DIR.exists():
+        for f in RESEARCH_DIR.iterdir():
+            if f.suffix == ".md":
+                stem_normalized = f.stem.replace("-", "_")
+                if topic_normalized in stem_normalized:
+                    return f
+    return None
+
+
+# =============================================================================
+# Tmux Helpers
+# =============================================================================
+
+def tmux_session_exists(session_name: str) -> bool:
+    """Check if a tmux session exists."""
+    result = subprocess.run(
+        ["tmux", "has-session", "-t", session_name],
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def tmux_create_session(session_name: str, working_dir: Path) -> bool:
+    """Create a new tmux session. Returns True if created."""
+    if tmux_session_exists(session_name):
+        return False
+
+    subprocess.run(
+        ["tmux", "new-session", "-d", "-s", session_name, "-c", str(working_dir)],
+        check=True,
+    )
+    return True
+
+
+def tmux_kill_session(session_name: str) -> bool:
+    """Kill a tmux session. Returns True if killed."""
+    if not tmux_session_exists(session_name):
+        return False
+
+    subprocess.run(
+        ["tmux", "kill-session", "-t", session_name],
+        check=True,
+    )
+    return True
+
+
+def tmux_send_keys(session_name: str, keys: str, enter: bool = True, pane: Optional[str] = None) -> None:
+    """Send keys to a tmux session (optionally to a specific pane).
+
+    If pane starts with '%', it's a pane ID and used directly.
+    Otherwise it's treated as a pane index within the session.
+    """
+    if pane:
+        # Pane IDs start with %, use directly
+        target = pane if pane.startswith("%") else f"{session_name}:{pane}"
+    else:
+        target = session_name
+    cmd = ["tmux", "send-keys", "-t", target, keys]
+    if enter:
+        cmd.append("Enter")
+    subprocess.run(cmd, check=True)
+
+
+def tmux_paste_text(session_name: str, text: str) -> None:
+    """Paste text into a tmux session using the paste buffer.
+
+    More reliable than send-keys for long or multi-line text.
+    """
+    # Load text into tmux buffer
+    subprocess.run(["tmux", "load-buffer", "-"], input=text.encode(), check=True)
+    # Paste buffer into session
+    subprocess.run(["tmux", "paste-buffer", "-t", session_name], check=True)
+
+
+def tmux_split_horizontal(session_name: str, working_dir: Optional[Path] = None) -> str:
+    """Create a horizontal split in a tmux session. Returns the new pane ID."""
+    cmd = ["tmux", "split-window", "-h", "-t", session_name, "-P", "-F", "#{pane_id}"]
+    if working_dir:
+        cmd.extend(["-c", str(working_dir)])
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
+
+def tmux_list_sessions() -> list[dict]:
+    """List all tmux sessions with their info."""
+    result = subprocess.run(
+        ["tmux", "list-sessions", "-F", "#{session_name}:#{session_attached}:#{session_activity}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+
+    sessions = []
+    for line in result.stdout.strip().split("\n"):
+        if not line:
+            continue
+        parts = line.split(":")
+        if len(parts) >= 3:
+            sessions.append({
+                "name": parts[0],
+                "attached": parts[1] == "1",
+                "activity": int(parts[2]) if parts[2].isdigit() else 0,
+            })
+    return sessions
+
+
+def get_design_prompt(feature: str, design_path: Optional[Path], issue_repo: Optional[str] = None, issue_number: Optional[int] = None) -> str:
+    """Generate prompt for Design phase - focus on design doc only."""
+    template = load_template(PROMPTS_DIR / "design.md")
+
+    docs_dir = get_docs_dir()
+    design_rel = f"dev/{design_path.relative_to(docs_dir.parent)}" if design_path else "No design doc found"
+
+    issue_info = ""
+    if issue_repo and issue_number:
+        issue_url = f"https://github.com/{issue_repo}/issues/{issue_number}"
+        issue_info = f"\nGitHub Issue: {issue_url}\n"
+
+    return template.substitute(
+        feature=feature,
+        design_path=str(design_rel),
+        issue_info=issue_info,
+    )
+
+
+def get_planning_prompt(feature: str, worktree: Optional[str] = None) -> str:
+    """Generate prompt for Planning phase - create implementation plan."""
+    template = load_template(PROMPTS_DIR / "planning.md")
+
+    # Use worktree docs if specified
+    if worktree:
+        docs_dir = WORKTREES_DIR / worktree / "dev" / "docs"
+    else:
+        docs_dir = get_docs_dir()
+    docs = find_feature_docs(feature, worktree=worktree)
+    design_path = f"dev/{docs['design'][0].relative_to(docs_dir.parent)}" if docs["design"] else "No design doc found"
+
+    if is_large_feature(feature):
+        plan_path = f"dev/docs/features/{feature}/plan.md"
+    else:
+        plan_path = f"dev/docs/plans/{get_date_prefix()}_{feature.replace('-', '_')}.md"
+
+    return template.substitute(
+        feature=feature,
+        design_path=design_path,
+        plan_path=plan_path,
+    )
+
+
+def get_implementation_prompt(feature: str, worktree: Optional[str] = None) -> str:
+    """Generate prompt for Implementation phase - execute the plan."""
+    template = load_template(PROMPTS_DIR / "implementation.md")
+
+    # Use worktree docs if specified
+    if worktree:
+        docs_dir = WORKTREES_DIR / worktree / "dev" / "docs"
+    else:
+        docs_dir = get_docs_dir()
+    docs = find_feature_docs(feature, worktree=worktree)
+    plan_path = f"dev/{docs['plan'][0].relative_to(docs_dir.parent)}" if docs["plan"] else "No plan doc found"
+
+    return template.substitute(
+        feature=feature,
+        plan_path=plan_path,
+    )
+
+
+# Backwards compatibility alias
+def get_initial_prompt(feature: str, design_path: Optional[Path], issue_repo: Optional[str] = None, issue_number: Optional[int] = None) -> str:
+    """Generate initial prompt for Claude Code (Design phase)."""
+    return get_design_prompt(feature, design_path, issue_repo, issue_number)
+
+
+def get_resume_prompt(feature: str) -> str:
+    """Generate resume prompt for Claude Code."""
+    template = load_template(PROMPTS_DIR / "resume.md")
+
+    docs_dir = get_docs_dir()
+    # Find docs for this feature
+    docs = find_feature_docs(feature)
+    docs_info_lines = []
+
+    if docs["design"]:
+        for d in docs["design"]:
+            docs_info_lines.append(f"Design: {d.relative_to(docs_dir.parent)}")
+    if docs["plan"]:
+        for p in docs["plan"]:
+            docs_info_lines.append(f"Plan: {p.relative_to(docs_dir.parent)}")
+
+    docs_info = "\n".join(docs_info_lines) if docs_info_lines else "No docs found"
+
+    return template.substitute(
+        feature=feature,
+        docs_info=docs_info,
+    )
+
+
+def get_research_prompt(topic: str, research_path: Optional[Path], issue_body: Optional[str] = None) -> str:
+    """Generate initial prompt for research tasks."""
+    template = load_template(PROMPTS_DIR / "research.md")
+
+    docs_dir = get_docs_dir()
+    research_rel = research_path.relative_to(docs_dir.parent) if research_path else "No research doc found"
+
+    issue_context = ""
+    if issue_body:
+        issue_context = f"**Issue context:**\n\n{issue_body}\n"
+
+    return template.substitute(
+        topic=topic,
+        research_path=str(research_rel),
+        issue_context=issue_context,
+    )
+
+
+# =============================================================================
+# GitHub Project Helpers
+# =============================================================================
+
+def gh_api(query: str, variables: Optional[dict] = None) -> dict:
+    """Execute a GitHub GraphQL query."""
+    cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
+    if variables:
+        for key, value in variables.items():
+            # Use -F for integers/booleans (JSON evaluation), -f for strings
+            if isinstance(value, (int, bool)):
+                cmd.extend(["-F", f"{key}={value}"])
+            else:
+                cmd.extend(["-f", f"{key}={value}"])
+
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"GitHub API error: {result.stderr}")
+
+    return json.loads(result.stdout)
+
+
+def gh_get_project_id() -> str:
+    """Get the GitHub Project node ID."""
+    query = """
+    query($org: String!, $number: Int!) {
+      organization(login: $org) {
+        projectV2(number: $number) {
+          id
+        }
+      }
+    }
+    """
+    result = gh_api(query, {"org": GITHUB_ORG, "number": GITHUB_PROJECT_NUMBER})
+    return result["data"]["organization"]["projectV2"]["id"]
+
+
+def gh_get_field_ids() -> dict:
+    """Get field IDs for Phase, Kind, Branch."""
+    query = """
+    query($org: String!, $number: Int!) {
+      organization(login: $org) {
+        projectV2(number: $number) {
+          fields(first: 20) {
+            nodes {
+              ... on ProjectV2SingleSelectField {
+                id
+                name
+                options {
+                  id
+                  name
+                }
+              }
+              ... on ProjectV2Field {
+                id
+                name
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+    result = gh_api(query, {"org": GITHUB_ORG, "number": GITHUB_PROJECT_NUMBER})
+    fields = result["data"]["organization"]["projectV2"]["fields"]["nodes"]
+
+    field_map = {}
+    for field in fields:
+        if not field:
+            continue
+        name = field.get("name")
+        if name in ["Status", "Kind", "Branch"]:
+            field_map[name] = {
+                "id": field["id"],
+                "options": {opt["name"]: opt["id"] for opt in field.get("options", [])}
+            }
+    return field_map
+
+
+def gh_list_project_items() -> list[dict]:
+    """List all items in the GitHub Project."""
+    query = """
+    query($org: String!, $number: Int!) {
+      organization(login: $org) {
+        projectV2(number: $number) {
+          items(first: 100) {
+            nodes {
+              id
+              content {
+                ... on Issue {
+                  title
+                  number
+                  url
+                  body
+                  repository {
+                    nameWithOwner
+                  }
+                }
+                ... on DraftIssue {
+                  title
+                  body
+                }
+              }
+              fieldValues(first: 10) {
+                nodes {
+                  ... on ProjectV2ItemFieldSingleSelectValue {
+                    field { ... on ProjectV2SingleSelectField { name } }
+                    name
+                  }
+                  ... on ProjectV2ItemFieldTextValue {
+                    field { ... on ProjectV2Field { name } }
+                    text
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+    result = gh_api(query, {"org": GITHUB_ORG, "number": GITHUB_PROJECT_NUMBER})
+    items = result["data"]["organization"]["projectV2"]["items"]["nodes"]
+
+    parsed_items = []
+    for item in items:
+        if not item or not item.get("content"):
+            continue
+
+        content = item["content"]
+        parsed = {
+            "id": item["id"],
+            "title": content.get("title", ""),
+            "body": content.get("body", ""),
+            "issue_number": content.get("number"),
+            "issue_url": content.get("url"),
+            "repo": content.get("repository", {}).get("nameWithOwner"),
+            "status": None,
+            "kind": None,
+            "branch": None,
+        }
+
+        # Extract field values
+        for fv in item.get("fieldValues", {}).get("nodes", []):
+            if not fv:
+                continue
+            field_name = fv.get("field", {}).get("name")
+            if field_name == "Status":
+                parsed["status"] = fv.get("name")
+            elif field_name == "Kind":
+                parsed["kind"] = fv.get("name")
+            elif field_name == "Branch":
+                parsed["branch"] = fv.get("text")
+
+        parsed_items.append(parsed)
+
+    return parsed_items
+
+
+def gh_update_item_field(item_id: str, field_id: str, value: str, is_single_select: bool = False, option_id: str = None) -> None:
+    """Update a field value on a project item."""
+    project_id = gh_get_project_id()
+
+    if is_single_select:
+        mutation = """
+        mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+          updateProjectV2ItemFieldValue(input: {
+            projectId: $projectId
+            itemId: $itemId
+            fieldId: $fieldId
+            value: { singleSelectOptionId: $optionId }
+          }) {
+            projectV2Item { id }
+          }
+        }
+        """
+        gh_api(mutation, {
+            "projectId": project_id,
+            "itemId": item_id,
+            "fieldId": field_id,
+            "optionId": option_id
+        })
+    else:
+        mutation = """
+        mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: String!) {
+          updateProjectV2ItemFieldValue(input: {
+            projectId: $projectId
+            itemId: $itemId
+            fieldId: $fieldId
+            value: { text: $value }
+          }) {
+            projectV2Item { id }
+          }
+        }
+        """
+        gh_api(mutation, {
+            "projectId": project_id,
+            "itemId": item_id,
+            "fieldId": field_id,
+            "value": value
+        })
+
+
+def gh_add_issue_comment(repo: str, issue_number: int, body: str) -> None:
+    """Add a comment to a GitHub issue."""
+    subprocess.run(
+        ["gh", "issue", "comment", str(issue_number), "--repo", repo, "--body", body],
+        check=True,
+        capture_output=True
+    )
+
+
+FLOVYN_TRACKING_MARKER = "<!-- flovyn-tracking -->"
+
+
+def gh_get_issue_body(repo: str, issue_number: int) -> str:
+    """Get the body of a GitHub issue."""
+    result = subprocess.run(
+        ["gh", "issue", "view", str(issue_number), "--repo", repo, "--json", "body"],
+        capture_output=True, text=True, check=True
+    )
+    data = json.loads(result.stdout)
+    return data.get("body", "")
+
+
+def gh_update_issue_body(repo: str, issue_number: int, body: str) -> None:
+    """Update the body of a GitHub issue."""
+    subprocess.run(
+        ["gh", "issue", "edit", str(issue_number), "--repo", repo, "--body", body],
+        check=True,
+        capture_output=True
+    )
+
+
+def gh_update_issue_tracking(repo: str, issue_number: int, status: str, branch: str, summary: str) -> None:
+    """Update the flovyn tracking section in an issue body."""
+    current_body = gh_get_issue_body(repo, issue_number)
+
+    # Build tracking section
+    tracking_section = f"""{FLOVYN_TRACKING_MARKER}
+
+---
+
+## 📊 Flovyn Tracking
+
+**Status:** {status}
+**Branch:** `{branch}`
+
+{summary}"""
+
+    # Check if tracking section exists
+    if FLOVYN_TRACKING_MARKER in current_body:
+        # Replace existing tracking section
+        marker_pos = current_body.find(FLOVYN_TRACKING_MARKER)
+        new_body = current_body[:marker_pos].rstrip() + "\n\n" + tracking_section
+    else:
+        # Append tracking section
+        new_body = current_body.rstrip() + "\n\n" + tracking_section
+
+    gh_update_issue_body(repo, issue_number, new_body)
+
+
+def gh_find_item_by_branch(branch: str) -> Optional[dict]:
+    """Find a project item by branch name."""
+    items = gh_list_project_items()
+    for item in items:
+        if item.get("branch") == branch:
+            return item
+    return None
+
+
+def extract_doc_summary(doc_path: Path, sections: list[str]) -> str:
+    """Extract specified sections from a markdown document."""
+    if not doc_path.exists():
+        return ""
+
+    content = doc_path.read_text()
+    lines = content.split("\n")
+
+    extracted = []
+    current_section = None
+    current_content = []
+
+    for line in lines:
+        if line.startswith("## "):
+            # Save previous section if it was one we wanted
+            if current_section and current_section.lower() in [s.lower() for s in sections]:
+                extracted.append(f"### {current_section}\n" + "\n".join(current_content).strip())
+
+            current_section = line[3:].strip()
+            current_content = []
+        elif current_section:
+            current_content.append(line)
+
+    # Don't forget the last section
+    if current_section and current_section.lower() in [s.lower() for s in sections]:
+        extracted.append(f"### {current_section}\n" + "\n".join(current_content).strip())
+
+    return "\n\n".join(extracted)
+
+
+def extract_todo_progress(doc_path: Path) -> tuple[int, int, list[str], list[str]]:
+    """Extract TODO progress from a plan document. Returns (done, total, completed_items, pending_items)."""
+    if not doc_path.exists():
+        return 0, 0, [], []
+
+    content = doc_path.read_text()
+
+    completed = []
+    pending = []
+
+    for line in content.split("\n"):
+        line = line.strip()
+        if line.startswith("- [x]") or line.startswith("- [X]"):
+            completed.append(line[6:].strip())
+        elif line.startswith("- [ ]"):
+            pending.append(line[6:].strip())
+
+    return len(completed), len(completed) + len(pending), completed, pending
+
+
+# =============================================================================
+# Commands
+# =============================================================================
+
+def cmd_create(args: argparse.Namespace) -> int:
+    """Create worktrees for a feature."""
+    feature = args.feature
+    large = getattr(args, 'large', False)
+    issue_repo = getattr(args, 'issue_repo', None)
+    issue_number = getattr(args, 'issue_number', None)
+
+    if worktree_exists(feature):
+        print(colored(f"Error: Worktree '{feature}' already exists", Colors.RED))
+        return 1
+
+    print(colored(f"Creating worktree: {feature}", Colors.BLUE))
+    if large:
+        print(colored("  (large feature - using subdirectory structure)", Colors.YELLOW))
+
+    # Allocate ports
+    print(colored("  Allocating ports...", Colors.YELLOW))
+    allocation = allocate_ports(feature)
+    print(f"    Offset: {allocation.offset}")
+    for name, port in allocation.ports.items():
+        print(f"    {name}: {port}")
+
+    # Create worktree directory
+    worktree_path = WORKTREES_DIR / feature
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Create worktrees for each repo
+    created_repos = []
+    for repo in REPOS:
+        repo_path = FLOVYN_ROOT / repo
+        if not repo_path.exists():
+            print(colored(f"  Skipping {repo} (not found)", Colors.YELLOW))
+            continue
+
+        target_path = worktree_path / repo
+        print(f"  Creating {repo}...", end=" ")
+
+        try:
+            # Create branch if it doesn't exist
+            run_git(repo_path, "branch", feature, capture=True, check=False)
+
+            # Create worktree
+            run_git(repo_path, "worktree", "add", str(target_path), feature)
+            print(colored("✓", Colors.GREEN))
+            created_repos.append(repo)
+        except subprocess.CalledProcessError as e:
+            print(colored(f"✗ {e}", Colors.RED))
+            # Continue with other repos
+
+    # Generate .env for dev worktree
+    if "dev" in created_repos:
+        env_path = worktree_path / "dev" / ".env"
+        print(f"  Generating {env_path.relative_to(FLOVYN_ROOT)}...", end=" ")
+        env_content = generate_env_content(feature, allocation.ports)
+        env_path.write_text(env_content)
+        print(colored("✓", Colors.GREEN))
+
+    # Copy untracked files
+    for file_path in UNTRACKED_FILES:
+        src = FLOVYN_ROOT / file_path
+        dst = worktree_path / file_path
+        if src.exists():
+            print(f"  Copying {file_path}...", end=" ")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            print(colored("✓", Colors.GREEN))
+
+    # Create design doc
+    print(f"  Creating design doc...", end=" ")
+    design_path = create_design_doc(feature, large=large, issue_repo=issue_repo, issue_number=issue_number)
+    if design_path:
+        print(colored(f"✓ ({design_path.relative_to(DOCS_DIR)})", Colors.GREEN))
+    else:
+        print(colored("✗ (template not found)", Colors.YELLOW))
+
+    # Create tmux session (unless --no-session)
+    no_session = getattr(args, 'no_session', False)
+    if not no_session:
+        print(f"  Creating tmux session...", end=" ")
+        if tmux_create_session(feature, worktree_path):
+            print(colored("✓", Colors.GREEN))
+
+            # Launch Claude Code with Design phase prompt
+            print(f"  Launching Claude Code with prompt...", end=" ")
+            design_prompt = get_design_prompt(feature, design_path, issue_repo, issue_number)
+            escaped_prompt = shlex.quote(design_prompt)
+            tmux_send_keys(feature, f"claude {escaped_prompt}")
+            print(colored("✓", Colors.GREEN))
+        else:
+            print(colored("(already exists)", Colors.YELLOW))
+
+    print()
+    print(colored(f"Worktree '{feature}' created successfully!", Colors.GREEN))
+    print()
+    print("Ports:")
+    print(f"  App:         http://localhost:{allocation.ports['APP_PORT']}")
+    print(f"  Server HTTP: http://localhost:{allocation.ports['SERVER_HTTP_PORT']}")
+    print(f"  Server gRPC: localhost:{allocation.ports['SERVER_GRPC_PORT']}")
+    print(f"  Jaeger:      http://localhost:{allocation.ports['JAEGER_UI_PORT']}")
+
+    if not no_session:
+        print()
+        print("Tmux session created. To attach:")
+        print(f"  fdev attach {feature}")
+    else:
+        print()
+        print("Next steps:")
+        print(f"  cd {worktree_path}")
+        print(f"  cd dev && mise run start   # Start infrastructure")
+
+    return 0
+
+
+def cmd_delete(args: argparse.Namespace) -> int:
+    """Delete worktrees for a feature."""
+    feature = args.feature
+
+    if not worktree_exists(feature):
+        print(colored(f"Error: Worktree '{feature}' does not exist", Colors.RED))
+        return 1
+
+    worktree_path = WORKTREES_DIR / feature
+
+    if not args.force:
+        # Check for uncommitted changes
+        repos_with_changes = []
+        for repo in get_worktree_repos(feature):
+            result = run_git(worktree_path / repo, "status", "--porcelain", capture=True, check=False)
+            if result.stdout.strip():
+                repos_with_changes.append(repo)
+
+        if repos_with_changes:
+            print(colored("Warning: The following repos have uncommitted changes:", Colors.YELLOW))
+            for repo in repos_with_changes:
+                print(f"  - {repo}")
+            print()
+            response = input("Delete anyway? [y/N] ").strip().lower()
+            if response != "y":
+                print("Cancelled.")
+                return 1
+
+    print(colored(f"Deleting worktree: {feature}", Colors.BLUE))
+
+    # Remove worktrees for each repo
+    for repo in REPOS:
+        repo_path = FLOVYN_ROOT / repo
+        target_path = worktree_path / repo
+
+        if not target_path.exists():
+            continue
+
+        print(f"  Removing {repo}...", end=" ")
+        try:
+            run_git(repo_path, "worktree", "remove", str(target_path), "--force" if args.force else None)
+            print(colored("✓", Colors.GREEN))
+        except subprocess.CalledProcessError:
+            # Try to remove manually if git worktree fails
+            try:
+                shutil.rmtree(target_path)
+                run_git(repo_path, "worktree", "prune", check=False)
+                print(colored("✓ (manual)", Colors.GREEN))
+            except Exception as e:
+                print(colored(f"✗ {e}", Colors.RED))
+
+    # Remove worktree directory if empty
+    try:
+        worktree_path.rmdir()
+    except OSError:
+        # Not empty, try to remove remaining files
+        shutil.rmtree(worktree_path, ignore_errors=True)
+
+    # Delete branches (optional)
+    if args.delete_branches:
+        print(colored("  Deleting branches...", Colors.YELLOW))
+        for repo in REPOS:
+            repo_path = FLOVYN_ROOT / repo
+            if not repo_path.exists():
+                continue
+            result = run_git(repo_path, "branch", "-d", feature, capture=True, check=False)
+            if result.returncode == 0:
+                print(f"    {repo}: branch deleted")
+
+    # Kill tmux session if exists
+    if tmux_session_exists(feature):
+        print(f"  Killing tmux session...", end=" ")
+        tmux_kill_session(feature)
+        print(colored("✓", Colors.GREEN))
+
+    print()
+    print(colored(f"Worktree '{feature}' deleted.", Colors.GREEN))
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """Show git status for a feature's worktrees."""
+    feature = get_feature(args)
+
+    if not worktree_exists(feature):
+        print(colored(f"Error: Worktree '{feature}' does not exist", Colors.RED))
+        return 1
+
+    worktree_path = WORKTREES_DIR / feature
+
+    print(colored(f"Status for: {feature}", Colors.BLUE))
+    print()
+
+    for repo in get_worktree_repos(feature):
+        repo_worktree = worktree_path / repo
+        print(colored(f"[{repo}]", Colors.CYAN))
+
+        # Get branch info
+        result = run_git(repo_worktree, "branch", "--show-current", capture=True, check=False)
+        branch = result.stdout.strip() if result.returncode == 0 else "unknown"
+
+        # Get status
+        result = run_git(repo_worktree, "status", "--porcelain", capture=True, check=False)
+        status_lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
+
+        # Get ahead/behind
+        result = run_git(repo_worktree, "rev-list", "--left-right", "--count", f"origin/{branch}...HEAD", capture=True, check=False)
+        if result.returncode == 0:
+            parts = result.stdout.strip().split()
+            behind, ahead = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+        else:
+            behind, ahead = 0, 0
+
+        # Print summary
+        status_text = colored("clean", Colors.GREEN) if not status_lines else colored(f"{len(status_lines)} changes", Colors.YELLOW)
+        sync_parts = []
+        if ahead:
+            sync_parts.append(colored(f"↑{ahead}", Colors.GREEN))
+        if behind:
+            sync_parts.append(colored(f"↓{behind}", Colors.RED))
+        sync_text = " ".join(sync_parts) if sync_parts else "in sync"
+
+        print(f"  Branch: {branch}")
+        print(f"  Status: {status_text}")
+        print(f"  Remote: {sync_text}")
+
+        if args.verbose and status_lines:
+            print("  Changes:")
+            for line in status_lines[:10]:
+                print(f"    {line}")
+            if len(status_lines) > 10:
+                print(f"    ... and {len(status_lines) - 10} more")
+        print()
+
+    return 0
+
+
+def cmd_commit(args: argparse.Namespace) -> int:
+    """Commit changes across all repos in a worktree."""
+    feature = get_feature(args)
+    message = args.message
+    tracked_only = getattr(args, 'tracked_only', False)
+
+    if not worktree_exists(feature):
+        print(colored(f"Error: Worktree '{feature}' does not exist", Colors.RED))
+        return 1
+
+    worktree_path = WORKTREES_DIR / feature
+
+    print(colored(f"Committing in: {feature}", Colors.BLUE))
+    print(f"Message: {message}")
+    if tracked_only:
+        print(colored("(tracked files only)", Colors.YELLOW))
+    print()
+
+    committed = []
+    for repo in get_worktree_repos(feature):
+        repo_worktree = worktree_path / repo
+
+        # Check for changes
+        result = run_git(repo_worktree, "status", "--porcelain", capture=True, check=False)
+        if not result.stdout.strip():
+            continue
+
+        print(f"  {repo}...", end=" ")
+
+        try:
+            # Stage changes (-u for tracked only, -A for all including untracked)
+            run_git(repo_worktree, "add", "-u" if tracked_only else "-A")
+
+            # Commit
+            run_git(repo_worktree, "commit", "-m", message)
+            print(colored("✓", Colors.GREEN))
+            committed.append(repo)
+        except subprocess.CalledProcessError as e:
+            print(colored(f"✗ {e}", Colors.RED))
+
+    if committed:
+        print()
+        print(colored(f"Committed in {len(committed)} repo(s): {', '.join(committed)}", Colors.GREEN))
+    else:
+        print(colored("No changes to commit.", Colors.YELLOW))
+
+    return 0
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List all worktrees or GitHub Project items."""
+    remote = getattr(args, 'remote', False)
+    status_filter = getattr(args, 'status', None)
+    kind_filter = getattr(args, 'kind', None)
+
+    # Status/kind filters imply remote since they're GitHub Project fields
+    if remote or status_filter or kind_filter:
+        return cmd_list_remote(args, status_filter, kind_filter)
+
+    # Local worktrees
+    worktrees = list_all_worktrees()
+
+    if not worktrees:
+        print(colored("No worktrees found.", Colors.YELLOW))
+        print(f"Create one with: fdev create <feature>")
+        print(f"Or pick from GitHub: fdev pick")
+        return 0
+
+    print(colored("Local worktrees:", Colors.BLUE))
+    print()
+
+    for feature in worktrees:
+        repos = get_worktree_repos(feature)
+        allocation = get_ports_from_env(feature)
+        is_research = is_research_worktree(feature)
+
+        type_indicator = colored("[research]", Colors.YELLOW) if is_research else ""
+        print(colored(f"  {feature}", Colors.CYAN) + f" {type_indicator}")
+        print(f"    Repos: {', '.join(repos)}")
+        if allocation and not is_research:
+            print(f"    Ports: app={allocation.ports.get('APP_PORT', '?')}, server={allocation.ports.get('SERVER_HTTP_PORT', '?')}")
+        print()
+
+    return 0
+
+
+def cmd_list_remote(args: argparse.Namespace, status_filter: Optional[str], kind_filter: Optional[str]) -> int:
+    """List GitHub Project items."""
+    print(colored("Fetching from GitHub Project...", Colors.YELLOW))
+
+    try:
+        items = gh_list_project_items()
+    except RuntimeError as e:
+        print(colored(f"Error: {e}", Colors.RED))
+        return 1
+
+    # Get local worktrees for comparison
+    local_worktrees = set(list_all_worktrees())
+
+    # Apply filters
+    if status_filter:
+        items = [i for i in items if (i.get("status") or "").lower() == status_filter.lower()]
+    if kind_filter:
+        items = [i for i in items if (i.get("kind") or "").lower() == kind_filter.lower()]
+
+    if not items:
+        print(colored("No items found.", Colors.YELLOW))
+        return 0
+
+    print(colored(f"GitHub Project items ({len(items)}):", Colors.BLUE))
+    print()
+
+    # Group by phase
+    statuses = ["Backlog", "Research", "Design", "Planning", "Implementing", "Review", "Done"]
+    items_by_status = {s: [] for s in statuses}
+    items_by_status[None] = []  # For items without status
+
+    for item in items:
+        status = item.get("status")
+        if status in items_by_status:
+            items_by_status[status].append(item)
+        else:
+            items_by_status[None].append(item)
+
+    for status in statuses + [None]:
+        status_items = items_by_status.get(status, [])
+        if not status_items:
+            continue
+
+        status_name = status or "No Status"
+        print(colored(f"  [{status_name}]", Colors.YELLOW))
+
+        for item in status_items:
+            title = item.get("title", "Untitled")
+            branch = item.get("branch", "")
+            kind = item.get("kind", "")
+            has_local = branch in local_worktrees
+
+            # Format output
+            local_indicator = colored("●", Colors.GREEN) if has_local else " "
+            kind_str = f"[{kind}]" if kind else ""
+
+            print(f"    {local_indicator} {title} {colored(kind_str, Colors.CYAN)}")
+            if branch:
+                print(f"        Branch: {branch}")
+
+        print()
+
+    print("Legend: " + colored("●", Colors.GREEN) + " = has local worktree")
+    return 0
+
+
+def cmd_env(args: argparse.Namespace) -> int:
+    """Show allocated ports for a feature."""
+    feature = get_feature(args)
+
+    allocation = get_ports_from_env(feature)
+
+    if not allocation:
+        print(colored(f"Error: No .env found for '{feature}'", Colors.RED))
+        print(f"Expected: {WORKTREES_DIR / feature / 'dev' / '.env'}")
+        return 1
+
+    print(colored(f"Environment for: {feature}", Colors.BLUE))
+    print(f"  Offset: {allocation.offset}")
+    print()
+    print(colored("Ports:", Colors.CYAN))
+    for name, port in sorted(allocation.ports.items()):
+        print(f"  {name}={port}")
+
+    print()
+    print(colored("URLs:", Colors.CYAN))
+    print(f"  App:         http://localhost:{allocation.ports.get('APP_PORT', '?')}")
+    print(f"  Server HTTP: http://localhost:{allocation.ports.get('SERVER_HTTP_PORT', '?')}")
+    print(f"  Server gRPC: localhost:{allocation.ports.get('SERVER_GRPC_PORT', '?')}")
+    print(f"  Jaeger UI:   http://localhost:{allocation.ports.get('JAEGER_UI_PORT', '?')}")
+    print(f"  NATS:        localhost:{allocation.ports.get('NATS_PORT', '?')}")
+
+    return 0
+
+
+def cmd_open(args: argparse.Namespace) -> int:
+    """Open design or plan doc for a feature."""
+    feature = get_feature(args)
+    doc_type = args.type  # 'design' or 'plan'
+
+    docs = find_feature_docs(feature)
+
+    if not docs["design"] and not docs["plan"]:
+        print(colored(f"Error: No docs found for '{feature}'", Colors.RED))
+        return 1
+
+    target_docs = docs[doc_type]
+
+    if not target_docs:
+        # Try the other type if requested type not found
+        other_type = "plan" if doc_type == "design" else "design"
+        if docs[other_type]:
+            print(colored(f"No {doc_type} doc found, but found {other_type} doc(s).", Colors.YELLOW))
+            target_docs = docs[other_type]
+        else:
+            print(colored(f"Error: No {doc_type} doc found for '{feature}'", Colors.RED))
+            return 1
+
+    # If multiple docs, let user choose
+    if len(target_docs) > 1:
+        print(colored(f"Multiple {doc_type} docs found:", Colors.BLUE))
+        for i, doc in enumerate(target_docs, 1):
+            print(f"  {i}. {doc.name}")
+        try:
+            choice = int(input("Select (number): ").strip()) - 1
+            if 0 <= choice < len(target_docs):
+                doc_path = target_docs[choice]
+            else:
+                print(colored("Invalid selection.", Colors.RED))
+                return 1
+        except (ValueError, EOFError):
+            print(colored("Invalid selection.", Colors.RED))
+            return 1
+    else:
+        doc_path = target_docs[0]
+
+    # Open in editor
+    editor = os.environ.get("EDITOR", "vim")
+    print(f"Opening {doc_path.relative_to(get_docs_dir())} in {editor}...")
+    os.execvp(editor, [editor, str(doc_path)])
+    return 0
+
+
+def cmd_docs(args: argparse.Namespace) -> int:
+    """List docs for a feature."""
+    feature = get_feature(args)
+
+    docs = find_feature_docs(feature)
+
+    if not docs["design"] and not docs["plan"]:
+        print(colored(f"No docs found for '{feature}'", Colors.YELLOW))
+        return 0
+
+    print(colored(f"Docs for: {feature}", Colors.BLUE))
+
+    if is_large_feature(feature):
+        print(colored("  (large feature - subdirectory structure)", Colors.YELLOW))
+
+    print()
+
+    docs_dir = get_docs_dir()
+    if docs["design"]:
+        print(colored("Design:", Colors.CYAN))
+        for doc in docs["design"]:
+            print(f"  {doc.relative_to(docs_dir)}")
+
+    if docs["plan"]:
+        print(colored("Plan:", Colors.CYAN))
+        for doc in docs["plan"]:
+            print(f"  {doc.relative_to(docs_dir)}")
+
+    return 0
+
+
+def cmd_docs_promote(args: argparse.Namespace) -> int:
+    """Promote a feature to large feature structure."""
+    feature = get_feature(args)
+
+    if is_large_feature(feature):
+        print(colored(f"Feature '{feature}' is already a large feature.", Colors.YELLOW))
+        return 0
+
+    docs = find_feature_docs(feature)
+
+    if not docs["design"] and not docs["plan"]:
+        print(colored(f"Error: No docs found for '{feature}'", Colors.RED))
+        return 1
+
+    print(colored(f"Promoting '{feature}' to large feature structure...", Colors.BLUE))
+
+    # Create feature directory
+    feature_dir = FEATURES_DIR / feature
+    feature_dir.mkdir(parents=True, exist_ok=True)
+
+    # Move design docs
+    for doc in docs["design"]:
+        new_path = feature_dir / "design.md"
+        print(f"  Moving {doc.name} -> features/{feature}/design.md...", end=" ")
+        shutil.move(str(doc), str(new_path))
+        print(colored("✓", Colors.GREEN))
+
+    # Move plan docs
+    for i, doc in enumerate(docs["plan"]):
+        if len(docs["plan"]) == 1:
+            new_name = "plan.md"
+        else:
+            new_name = f"plan_{i + 1}.md"
+        new_path = feature_dir / new_name
+        print(f"  Moving {doc.name} -> features/{feature}/{new_name}...", end=" ")
+        shutil.move(str(doc), str(new_path))
+        print(colored("✓", Colors.GREEN))
+
+    print()
+    print(colored(f"Feature '{feature}' promoted to large feature structure.", Colors.GREEN))
+    print(f"  Location: {feature_dir.relative_to(DOCS_DIR)}/")
+    return 0
+
+
+def cmd_docs_archive(args: argparse.Namespace) -> int:
+    """Archive docs for a completed feature."""
+    feature = get_feature(args)
+
+    docs = find_feature_docs(feature)
+
+    if not docs["design"] and not docs["plan"]:
+        print(colored(f"Error: No docs found for '{feature}'", Colors.RED))
+        return 1
+
+    # Create archive directory
+    date_prefix = get_date_prefix()
+    archive_dir = ARCHIVE_DIR / f"{date_prefix}_{feature}"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    print(colored(f"Archiving docs for '{feature}'...", Colors.BLUE))
+
+    # Archive from large feature structure
+    if is_large_feature(feature):
+        feature_dir = FEATURES_DIR / feature
+        for doc in feature_dir.iterdir():
+            if doc.suffix == ".md":
+                new_path = archive_dir / doc.name
+                print(f"  Moving {doc.name}...", end=" ")
+                shutil.move(str(doc), str(new_path))
+                print(colored("✓", Colors.GREEN))
+        # Remove empty feature directory
+        try:
+            feature_dir.rmdir()
+        except OSError:
+            pass
+    else:
+        # Archive from standard structure
+        for doc in docs["design"]:
+            new_path = archive_dir / "design.md"
+            print(f"  Moving {doc.name} -> design.md...", end=" ")
+            shutil.move(str(doc), str(new_path))
+            print(colored("✓", Colors.GREEN))
+
+        for doc in docs["plan"]:
+            new_path = archive_dir / "plan.md"
+            print(f"  Moving {doc.name} -> plan.md...", end=" ")
+            shutil.move(str(doc), str(new_path))
+            print(colored("✓", Colors.GREEN))
+
+    print()
+    print(colored(f"Docs archived to: {archive_dir.relative_to(DOCS_DIR)}/", Colors.GREEN))
+    return 0
+
+
+def cmd_attach(args: argparse.Namespace) -> int:
+    """Attach to a feature's tmux session."""
+    feature = get_feature(args)
+    resume = not args.no_resume
+
+    # Check if session exists
+    if not tmux_session_exists(feature):
+        # Check if worktree exists - offer to create session
+        if worktree_exists(feature):
+            print(colored(f"No tmux session for '{feature}', but worktree exists.", Colors.YELLOW))
+            response = input("Create session and launch Claude? [Y/n] ").strip().lower()
+            if response != "n":
+                worktree_path = WORKTREES_DIR / feature
+                print(f"  Creating tmux session...", end=" ")
+                tmux_create_session(feature, worktree_path)
+                print(colored("✓", Colors.GREEN))
+
+                # Launch Claude with resume prompt since worktree already exists
+                print(f"  Launching Claude Code with prompt...", end=" ")
+                resume_prompt = get_resume_prompt(feature)
+                escaped_prompt = shlex.quote(resume_prompt)
+                tmux_send_keys(feature, f"claude {escaped_prompt}")
+                print(colored("✓", Colors.GREEN))
+            else:
+                print("Cancelled.")
+                return 1
+        else:
+            print(colored(f"Error: No session or worktree for '{feature}'", Colors.RED))
+            print(f"Create one with: fdev create {feature}")
+            return 1
+    elif resume:
+        # Send resume prompt before attaching
+        print(f"Sending resume prompt...", end=" ")
+        resume_prompt = get_resume_prompt(feature)
+        tmux_send_keys(feature, resume_prompt)
+        print(colored("✓", Colors.GREEN))
+
+    # Attach to session
+    print(f"Attaching to session '{feature}'...")
+    os.execvp("tmux", ["tmux", "attach-session", "-t", feature])
+    return 0
+
+
+def cmd_sessions(args: argparse.Namespace) -> int:
+    """List all flovyn-related tmux sessions."""
+    sessions = tmux_list_sessions()
+
+    if not sessions:
+        print(colored("No tmux sessions found.", Colors.YELLOW))
+        return 0
+
+    # Filter to only flovyn worktrees
+    worktrees = set(list_all_worktrees())
+    flovyn_sessions = [s for s in sessions if s["name"] in worktrees]
+
+    if not flovyn_sessions:
+        print(colored("No flovyn-related tmux sessions found.", Colors.YELLOW))
+        if sessions:
+            print(f"(There are {len(sessions)} other tmux sessions)")
+        return 0
+
+    print(colored("Flovyn tmux sessions:", Colors.BLUE))
+    print()
+
+    for session in flovyn_sessions:
+        name = session["name"]
+        attached = colored("attached", Colors.GREEN) if session["attached"] else colored("detached", Colors.YELLOW)
+        activity_time = datetime.fromtimestamp(session["activity"]).strftime("%Y-%m-%d %H:%M:%S")
+
+        print(f"  {colored(name, Colors.CYAN)}")
+        print(f"    Status: {attached}")
+        print(f"    Last activity: {activity_time}")
+        print()
+
+    print(f"Attach with: fdev attach <feature>")
+    return 0
+
+
+def cmd_pick(args: argparse.Namespace) -> int:
+    """Pick a task from GitHub Project and create worktree."""
+    status_filter = getattr(args, 'status', 'Backlog')
+    research_mode = getattr(args, 'research', False)
+
+    print(colored("Fetching from GitHub Project...", Colors.YELLOW))
+
+    try:
+        items = gh_list_project_items()
+    except RuntimeError as e:
+        print(colored(f"Error: {e}", Colors.RED))
+        return 1
+
+    # Filter by phase (default: Backlog)
+    if status_filter:
+        items = [i for i in items if (i.get("status") or "").lower() == status_filter.lower()]
+
+    # Filter by Kind=Research if --research flag is set
+    if research_mode:
+        items = [i for i in items if (i.get("kind") or "").lower() == "research"]
+
+    # Exclude items that already have local worktrees
+    local_worktrees = set(list_all_worktrees())
+    items = [i for i in items if i.get("branch") not in local_worktrees or not i.get("branch")]
+
+    filter_desc = f"{status_filter} Research" if research_mode else status_filter
+    if not items:
+        print(colored(f"No {filter_desc} items available to pick.", Colors.YELLOW))
+        return 0
+
+    print(colored(f"\nAvailable {filter_desc} items:", Colors.BLUE))
+    print()
+
+    for i, item in enumerate(items, 1):
+        title = item.get("title", "Untitled")
+        kind = item.get("kind", "")
+        branch = item.get("branch", "")
+
+        kind_str = f"[{kind}]" if kind else ""
+        branch_str = f"(branch: {branch})" if branch else "(no branch set)"
+
+        print(f"  {i}. {title} {colored(kind_str, Colors.CYAN)} {colored(branch_str, Colors.YELLOW)}")
+
+    print()
+
+    try:
+        choice = input("Select item (number): ").strip()
+        idx = int(choice) - 1
+        if idx < 0 or idx >= len(items):
+            print(colored("Invalid selection.", Colors.RED))
+            return 1
+    except (ValueError, EOFError):
+        print(colored("Cancelled.", Colors.YELLOW))
+        return 1
+
+    selected = items[idx]
+    title = selected.get("title", "")
+    branch = selected.get("branch", "")
+
+    # Generate branch name if not set
+    if not branch:
+        branch = re.sub(r'[^a-zA-Z0-9]+', '-', title.lower()).strip('-')
+        print(f"Generated branch name: {branch}")
+
+        confirm = input(f"Use '{branch}' as branch name? [Y/n] ").strip().lower()
+        if confirm == 'n':
+            branch = input("Enter branch name: ").strip()
+            if not branch:
+                print(colored("Branch name required.", Colors.RED))
+                return 1
+
+    # Update Branch field in GitHub
+    if selected.get("id"):
+        try:
+            fields = gh_get_field_ids()
+            if "Branch" in fields:
+                print(f"Updating Branch field in GitHub...", end=" ")
+                gh_update_item_field(
+                    selected["id"],
+                    fields["Branch"]["id"],
+                    branch,
+                    is_single_select=False
+                )
+                print(colored("✓", Colors.GREEN))
+        except RuntimeError as e:
+            print(colored(f"Warning: Could not update Branch field: {e}", Colors.YELLOW))
+
+    # Create worktree using appropriate command
+    print()
+
+    if research_mode:
+        # Research mode: create lightweight worktree
+        print(colored(f"Creating research worktree for: {branch}", Colors.BLUE))
+
+        class ResearchArgs:
+            topic = branch
+            no_session = False
+
+        result = cmd_research(ResearchArgs())
+
+        if result != 0:
+            return result
+
+        # Update tracking section (no phase change for research)
+        if selected.get("repo") and selected.get("issue_number"):
+            summary = f"### Research\n\nResearch doc: `dev/docs/research/{get_date_prefix()}_{branch.replace('-', '_')}.md`"
+            try:
+                gh_update_issue_tracking(selected["repo"], selected["issue_number"], "Research", branch, summary)
+                print(f"Updated issue #{selected['issue_number']}")
+            except Exception as e:
+                print(colored(f"Warning: Could not update issue: {e}", Colors.YELLOW))
+
+    else:
+        # Feature mode: create full worktree
+        print(colored(f"Creating worktree for: {branch}", Colors.BLUE))
+
+        class CreateArgs:
+            feature = branch
+            large = False
+            no_session = False
+            issue_repo = selected.get("repo")
+            issue_number = selected.get("issue_number")
+
+        result = cmd_create(CreateArgs())
+
+        if result != 0:
+            return result
+
+        # Update Phase to Design
+        if selected.get("id"):
+            try:
+                fields = gh_get_field_ids()
+                if "Status" in fields and "Design" in fields["Status"]["options"]:
+                    print(f"Updating Status to Design...", end=" ")
+                    gh_update_item_field(
+                        selected["id"],
+                        fields["Status"]["id"],
+                        "Design",
+                        is_single_select=True,
+                        option_id=fields["Status"]["options"]["Design"]
+                    )
+                    print(colored("✓", Colors.GREEN))
+
+                    # Update tracking section
+                    if selected.get("repo") and selected.get("issue_number"):
+                        summary = f"### Design\n\nDesign doc: `dev/docs/design/{get_date_prefix()}_{branch.replace('-', '_')}.md`\n\n*Working on design document...*"
+                        gh_update_issue_tracking(selected["repo"], selected["issue_number"], "Design", branch, summary)
+                        print(f"Updated issue #{selected['issue_number']}")
+
+            except RuntimeError as e:
+                print(colored(f"Warning: Could not update Status: {e}", Colors.YELLOW))
+
+    return 0
+
+
+def cmd_move(args: argparse.Namespace) -> int:
+    """Move a feature to a new status and update GitHub."""
+    feature = get_feature(args)
+    new_status = args.status
+
+    valid_statuses = ["Backlog", "Research", "Design", "Planning", "Implementing", "Review", "Done"]
+    if new_status not in valid_statuses:
+        print(colored(f"Error: Invalid status '{new_status}'", Colors.RED))
+        print(f"Valid statuses: {', '.join(valid_statuses)}")
+        return 1
+
+    # Find item in GitHub Project
+    print(colored(f"Looking up '{feature}' in GitHub Project...", Colors.YELLOW))
+
+    try:
+        item = gh_find_item_by_branch(feature)
+    except RuntimeError as e:
+        print(colored(f"Error: {e}", Colors.RED))
+        return 1
+
+    if not item:
+        print(colored(f"Error: No GitHub item found with branch '{feature}'", Colors.RED))
+        return 1
+
+    current_status = item.get("status", "None")
+    print(f"Current status: {current_status}")
+    print(f"New status: {new_status}")
+
+    already_in_status = current_status == new_status
+    if already_in_status:
+        print(colored("Already in that status.", Colors.YELLOW))
+        # Still continue to send prompt if applicable
+
+    # Update status (skip if already in status)
+    if not already_in_status:
+        try:
+            fields = gh_get_field_ids()
+            if "Status" not in fields or new_status not in fields["Status"]["options"]:
+                print(colored(f"Error: Could not find Status field or option", Colors.RED))
+                return 1
+
+            print(f"Updating status...", end=" ")
+            gh_update_item_field(
+                item["id"],
+                fields["Status"]["id"],
+                new_status,
+                is_single_select=True,
+                option_id=fields["Status"]["options"][new_status]
+            )
+            print(colored("✓", Colors.GREEN))
+
+        except RuntimeError as e:
+            print(colored(f"Error: {e}", Colors.RED))
+            return 1
+
+        # Update tracking section in GitHub issue
+        if item.get("repo") and item.get("issue_number"):
+            summary = generate_status_tracking_summary(feature, new_status)
+            print(f"Updating issue #{item['issue_number']}...", end=" ")
+            try:
+                gh_update_issue_tracking(item["repo"], item["issue_number"], new_status, feature, summary)
+                print(colored("✓", Colors.GREEN))
+            except Exception as e:
+                print(colored(f"Warning: {e}", Colors.YELLOW))
+
+        print()
+        print(colored(f"Moved '{feature}' from {current_status} to {new_status}", Colors.GREEN))
+
+    # Start Claude and send status prompt for Design/Planning/Implementation
+    statuses_with_prompts = ("Design", "Planning", "Implementing")
+    if args.send_prompt and new_status in statuses_with_prompts:
+        if tmux_session_exists(feature):
+            print()
+            if new_status == "Design":
+                print(colored("Starting Claude for Design status...", Colors.YELLOW))
+                docs = find_feature_docs(feature, worktree=feature)
+                design_path = docs["design"][0] if docs["design"] else None
+                issue_repo = item.get("repo")
+                issue_number = item.get("issue_number")
+                prompt = get_design_prompt(feature, design_path, issue_repo, issue_number)
+            elif new_status == "Planning":
+                print(colored("Starting Claude for Planning status...", Colors.YELLOW))
+                prompt = get_planning_prompt(feature, worktree=feature)
+            else:  # Implementing
+                print(colored("Starting Claude for Implementing status...", Colors.YELLOW))
+                prompt = get_implementation_prompt(feature, worktree=feature)
+
+            # Start Claude with the prompt as initial message
+            print(f"  Launching Claude Code with prompt...", end=" ")
+            escaped_prompt = shlex.quote(prompt)
+            tmux_send_keys(feature, f"claude {escaped_prompt}")
+            print(colored("✓", Colors.GREEN))
+
+            print()
+            print(f"Attach with: fdev attach {feature} --no-resume")
+        else:
+            print()
+            print(colored("No tmux session found.", Colors.YELLOW))
+            print(f"Create one with: fdev attach {feature}")
+
+    # Create PRs when moving to Review
+    if new_status == "Review":
+        print()
+        print(colored("Creating PRs for review...", Colors.YELLOW))
+        created_prs = create_prs_for_feature(feature, update_issue=True)
+        if created_prs:
+            print()
+            print(colored(f"Created/found {len(created_prs)} PR(s):", Colors.GREEN))
+            for repo, url in created_prs:
+                print(f"  - {repo}: {url}")
+
+    # Merge PRs and update main when moving to Done
+    if new_status == "Done":
+        print()
+        print(colored("Completing feature...", Colors.YELLOW))
+        merge_and_cleanup_feature(feature)
+
+    return 0
+
+
+def generate_status_tracking_summary(feature: str, status: str) -> str:
+    """Generate summary content for the tracking section based on status."""
+    docs = find_feature_docs(feature)
+
+    if status == "Design":
+        return "*Working on design document...*"
+
+    elif status == "Planning":
+        # Extract design summary
+        if docs["design"]:
+            summary = extract_doc_summary(docs["design"][0], ["Problem Statement", "Solution"])
+            if summary:
+                return f"### Design Summary\n\n{summary}"
+        return "*Design complete, creating implementation plan...*"
+
+    elif status == "Implementing":
+        # Extract plan TODO list
+        if docs["plan"]:
+            done, total, completed, pending = extract_todo_progress(docs["plan"][0])
+            progress_pct = int((done / total * 100)) if total > 0 else 0
+
+            summary = f"### Progress\n\n**{done}/{total}** tasks completed ({progress_pct}%)\n"
+
+            if pending:
+                todo_list = "\n".join([f"- [ ] {item}" for item in pending[:5]])
+                if len(pending) > 5:
+                    todo_list += f"\n- ... and {len(pending) - 5} more"
+                summary += f"\n### Next Tasks\n\n{todo_list}"
+
+            return summary
+        return "*Implementation in progress...*"
+
+    elif status == "Review":
+        # Show final progress
+        if docs["plan"]:
+            done, total, completed, pending = extract_todo_progress(docs["plan"][0])
+            progress_pct = int((done / total * 100)) if total > 0 else 0
+            return f"### Progress\n\n**{done}/{total}** tasks completed ({progress_pct}%)\n\n*Ready for review*"
+        return "*Ready for review*"
+
+    elif status == "Done":
+        return "### Outcome\n\n✅ **Completed**"
+
+    return ""
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    """Sync local worktrees with GitHub Project."""
+    print(colored("Syncing with GitHub Project...", Colors.YELLOW))
+    print()
+
+    try:
+        items = gh_list_project_items()
+    except RuntimeError as e:
+        print(colored(f"Error: {e}", Colors.RED))
+        return 1
+
+    local_worktrees = set(list_all_worktrees())
+    remote_branches = {item.get("branch") for item in items if item.get("branch")}
+
+    # Find orphaned local (no GitHub item)
+    orphaned_local = local_worktrees - remote_branches
+
+    # Find orphaned remote (GitHub item with branch, no local worktree)
+    orphaned_remote = remote_branches - local_worktrees
+
+    # Find in-sync
+    in_sync = local_worktrees & remote_branches
+
+    print(colored("Sync Status:", Colors.BLUE))
+    print()
+
+    if in_sync:
+        print(colored("  In Sync:", Colors.GREEN))
+        for branch in sorted(in_sync):
+            item = next((i for i in items if i.get("branch") == branch), None)
+            status = item.get("status", "?") if item else "?"
+            print(f"    ● {branch} [{status}]")
+        print()
+
+    if orphaned_local:
+        print(colored("  Local Only (no GitHub item):", Colors.YELLOW))
+        for branch in sorted(orphaned_local):
+            print(f"    ○ {branch}")
+        print()
+
+    if orphaned_remote:
+        print(colored("  GitHub Only (no local worktree):", Colors.CYAN))
+        for branch in sorted(orphaned_remote):
+            item = next((i for i in items if i.get("branch") == branch), None)
+            status = item.get("status", "?") if item else "?"
+            print(f"    ○ {branch} [{status}]")
+        print()
+
+    # Summary
+    total = len(local_worktrees | remote_branches)
+    print(f"Total: {len(in_sync)} synced, {len(orphaned_local)} local-only, {len(orphaned_remote)} remote-only")
+
+    # Update progress for in-progress items
+    update_progress = getattr(args, 'update_progress', False)
+    if update_progress:
+        print()
+        print(colored("Updating progress for Implementing items...", Colors.YELLOW))
+
+        for branch in in_sync:
+            item = next((i for i in items if i.get("branch") == branch), None)
+            if item and item.get("status") == "Implementing" and item.get("repo") and item.get("issue_number"):
+                summary = generate_status_tracking_summary(branch, "Implementing")
+                print(f"  Updating {branch}...", end=" ")
+                try:
+                    gh_update_issue_tracking(item["repo"], item["issue_number"], "Implementing", branch, summary)
+                    print(colored("✓", Colors.GREEN))
+                except Exception as e:
+                    print(colored(f"✗ {e}", Colors.RED))
+
+    return 0
+
+
+def cmd_research(args: argparse.Namespace) -> int:
+    """Create a lightweight research worktree (dev/ only)."""
+    topic = args.topic
+
+    if worktree_exists(topic):
+        print(colored(f"Error: Worktree '{topic}' already exists", Colors.RED))
+        return 1
+
+    print(colored(f"Creating research worktree: {topic}", Colors.BLUE))
+    print(colored("  (research mode - dev/ repo only)", Colors.YELLOW))
+
+    # Create worktree directory
+    worktree_path = WORKTREES_DIR / topic
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Create worktree for dev repo ONLY
+    repo_path = FLOVYN_ROOT / "dev"
+    target_path = worktree_path / "dev"
+
+    print(f"  Creating dev...", end=" ")
+    try:
+        # Create branch if it doesn't exist
+        run_git(repo_path, "branch", topic, capture=True, check=False)
+
+        # Create worktree
+        run_git(repo_path, "worktree", "add", str(target_path), topic)
+        print(colored("✓", Colors.GREEN))
+    except subprocess.CalledProcessError as e:
+        print(colored(f"✗ {e}", Colors.RED))
+        return 1
+
+    # Create research doc
+    print(f"  Creating research doc...", end=" ")
+    research_path = create_research_doc(topic)
+    if research_path:
+        print(colored(f"✓ ({research_path.relative_to(DOCS_DIR)})", Colors.GREEN))
+    else:
+        print(colored("✗ (could not create)", Colors.YELLOW))
+
+    # Create tmux session (unless --no-session)
+    no_session = getattr(args, 'no_session', False)
+    if not no_session:
+        print(f"  Creating tmux session...", end=" ")
+        if tmux_create_session(topic, worktree_path):
+            print(colored("✓", Colors.GREEN))
+
+            # Launch Claude Code with research prompt
+            print(f"  Launching Claude Code with prompt...", end=" ")
+            research_prompt = get_research_prompt(topic, research_path)
+            escaped_prompt = shlex.quote(research_prompt)
+            tmux_send_keys(topic, f"claude {escaped_prompt}")
+            print(colored("✓", Colors.GREEN))
+        else:
+            print(colored("(already exists)", Colors.YELLOW))
+
+    print()
+    print(colored(f"Research worktree '{topic}' created!", Colors.GREEN))
+    print()
+    print(f"Research doc: {research_path.relative_to(DOCS_DIR) if research_path else 'N/A'}")
+    print()
+
+    if not no_session:
+        print("Tmux session created. To attach:")
+        print(f"  fdev attach {topic}")
+    else:
+        print("Next steps:")
+        print(f"  cd {worktree_path}")
+
+    print()
+    print("When research leads to implementation:")
+    print(f"  fdev docs mv {topic} research design  # Convert to design doc")
+    print(f"  fdev pick {topic}                     # Create full worktree")
+
+    return 0
+
+
+def create_prs_for_feature(feature: str, update_issue: bool = True) -> list[tuple[str, str]]:
+    """Create PRs for a feature across all repos with changes.
+
+    Returns list of (repo, pr_url) tuples for created/existing PRs.
+    """
+    if not worktree_exists(feature):
+        print(colored(f"Error: Worktree '{feature}' does not exist", Colors.RED))
+        return []
+
+    worktree_path = WORKTREES_DIR / feature
+    repos = get_worktree_repos(feature)
+
+    # Phase 1: Check status of each repo
+    repos_to_pr = []
+    repos_with_uncommitted = []
+
+    for repo in repos:
+        repo_worktree = worktree_path / repo
+
+        # Check for uncommitted changes
+        result = run_git(repo_worktree, "status", "--porcelain", capture=True, check=False)
+        if result.stdout.strip():
+            repos_with_uncommitted.append(repo)
+            continue
+
+        # Check if branch has commits not on main
+        result = run_git(repo_worktree, "rev-list", f"main..{feature}", "--count", capture=True, check=False)
+        commit_count = int(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip().isdigit() else 0
+
+        if commit_count > 0:
+            repos_to_pr.append((repo, commit_count))
+
+    # Warn about uncommitted changes
+    if repos_with_uncommitted:
+        print(colored("Warning: The following repos have uncommitted changes:", Colors.YELLOW))
+        for repo in repos_with_uncommitted:
+            print(f"  - {repo}")
+        print()
+
+    if not repos_to_pr:
+        print(colored("No repos have commits to create PRs for.", Colors.YELLOW))
+        return []
+
+    print(colored("Repos with changes:", Colors.CYAN))
+    for repo, count in repos_to_pr:
+        print(f"  - {repo}: {count} commit(s)")
+    print()
+
+    # Phase 2: Push branches and create PRs
+    created_prs = []
+
+    # Get design doc summary
+    docs = find_feature_docs(feature)
+    summary = ""
+    if docs["design"]:
+        summary = extract_doc_summary(docs["design"][0], ["Problem Statement", "Solution"])
+
+    # Look up GitHub issue for cross-repo linking
+    issue_reference = ""
+    try:
+        item = gh_find_item_by_branch(feature)
+        if item and item.get("repo") and item.get("issue_number"):
+            issue_reference = f"Related to {GITHUB_ORG}/{item['repo']}#{item['issue_number']}\n"
+    except Exception:
+        pass  # Continue without issue reference
+
+    for repo, _ in repos_to_pr:
+        repo_worktree = worktree_path / repo
+
+        print(f"Processing {repo}...")
+
+        # Push branch to origin
+        print(f"  Pushing branch...", end=" ")
+        try:
+            run_git(repo_worktree, "push", "-u", "origin", feature)
+            print(colored("✓", Colors.GREEN))
+        except subprocess.CalledProcessError as e:
+            print(colored(f"✗ {e}", Colors.RED))
+            continue
+
+        # Check if PR already exists
+        result = subprocess.run(
+            ["gh", "pr", "view", feature, "--repo", f"flovyn/{repo}", "--json", "url"],
+            capture_output=True, text=True, check=False, cwd=str(repo_worktree)
+        )
+        if result.returncode == 0:
+            pr_data = json.loads(result.stdout)
+            print(f"  PR already exists: {pr_data.get('url', 'unknown')}")
+            created_prs.append((repo, pr_data.get("url", "")))
+            continue
+
+        # Generate PR body
+        title = feature_to_title(feature)
+        pr_template = load_template(TEMPLATES_DIR / "pr_body.md")
+
+        if docs["design"]:
+            docs_dir = get_docs_dir()
+            design_rel = docs["design"][0].relative_to(docs_dir.parent)
+            design_doc_info = f"See `{design_rel}` for detailed design."
+        else:
+            design_doc_info = "No design doc found."
+
+        pr_body = pr_template.substitute(
+            issue_reference=issue_reference,
+            summary=summary if summary else "No design doc summary available.",
+            design_doc_info=design_doc_info,
+        )
+
+        # Create PR
+        print(f"  Creating PR...", end=" ")
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "create",
+                 "--title", title,
+                 "--body", pr_body,
+                 "--head", feature,
+                 "--base", "main"],
+                capture_output=True, text=True, check=True, cwd=str(repo_worktree)
+            )
+            # Parse PR URL from output
+            pr_url = result.stdout.strip().split("\n")[-1]
+            print(colored(f"✓ {pr_url}", Colors.GREEN))
+            created_prs.append((repo, pr_url))
+        except subprocess.CalledProcessError as e:
+            print(colored(f"✗ {e.stderr}", Colors.RED))
+
+    # Update tracking section with PR links
+    if created_prs and update_issue:
+        try:
+            item = gh_find_item_by_branch(feature)
+            if item and item.get("repo") and item.get("issue_number"):
+                pr_list = "\n".join([f"- [{repo}]({url})" for repo, url in created_prs])
+                pr_summary = f"### Pull Requests\n\n{pr_list}\n\n*Waiting for review and merge*"
+                current_status = item.get("status", "Review")
+                gh_update_issue_tracking(item["repo"], item["issue_number"], current_status, feature, pr_summary)
+                print()
+                print(f"Updated issue #{item['issue_number']} with PR links")
+        except Exception as e:
+            print(colored(f"Warning: Could not update GitHub issue: {e}", Colors.YELLOW))
+
+    return created_prs
+
+
+def merge_and_cleanup_feature(feature: str) -> None:
+    """Merge PRs for a feature and update main branches.
+
+    1. Find all open PRs for the feature
+    2. Merge them (squash merge)
+    3. Update main branches in main repos
+    4. Offer to clean up worktree
+    """
+    repos = get_worktree_repos(feature) if worktree_exists(feature) else REPOS
+
+    # Phase 1: Find and merge PRs
+    merged_prs = []
+    failed_prs = []
+
+    print(colored("Merging PRs...", Colors.CYAN))
+    for repo in repos:
+        # Check if PR exists for this branch
+        result = subprocess.run(
+            ["gh", "pr", "view", feature, "--repo", f"flovyn/{repo}", "--json", "url,state,mergeable"],
+            capture_output=True, text=True, check=False
+        )
+        if result.returncode != 0:
+            continue  # No PR for this repo
+
+        try:
+            pr_data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            continue
+
+        pr_url = pr_data.get("url", "")
+        state = pr_data.get("state", "")
+
+        if state == "MERGED":
+            print(f"  {repo}: Already merged")
+            merged_prs.append(repo)
+            continue
+
+        if state != "OPEN":
+            print(f"  {repo}: PR is {state}, skipping")
+            continue
+
+        # Merge the PR (squash)
+        print(f"  {repo}: Merging...", end=" ")
+        merge_result = subprocess.run(
+            ["gh", "pr", "merge", feature, "--repo", f"flovyn/{repo}", "--squash", "--delete-branch"],
+            capture_output=True, text=True, check=False
+        )
+        if merge_result.returncode == 0:
+            print(colored("✓", Colors.GREEN))
+            merged_prs.append(repo)
+        else:
+            print(colored(f"✗ {merge_result.stderr.strip()}", Colors.RED))
+            failed_prs.append((repo, merge_result.stderr.strip()))
+
+    if failed_prs:
+        print()
+        print(colored("Some PRs failed to merge:", Colors.YELLOW))
+        for repo, error in failed_prs:
+            print(f"  - {repo}: {error}")
+
+    # Phase 2: Update main branches in main repos
+    if merged_prs:
+        print()
+        print(colored("Updating main branches...", Colors.CYAN))
+        for repo in merged_prs:
+            main_repo_path = FLOVYN_ROOT / repo
+            if not main_repo_path.exists():
+                continue
+
+            print(f"  {repo}...", end=" ")
+            try:
+                # Fetch and pull main
+                run_git(main_repo_path, "fetch", "origin", "main")
+                run_git(main_repo_path, "checkout", "main")
+                run_git(main_repo_path, "pull", "origin", "main")
+                print(colored("✓", Colors.GREEN))
+            except subprocess.CalledProcessError as e:
+                print(colored(f"✗ {e}", Colors.RED))
+
+    # Phase 3: Offer to clean up worktree
+    if worktree_exists(feature) and merged_prs:
+        print()
+        response = input(f"Delete worktree '{feature}'? [y/N] ").strip().lower()
+        if response == "y":
+            print(f"Cleaning up worktree...", end=" ")
+            try:
+                delete_worktree(feature)
+                print(colored("✓", Colors.GREEN))
+            except Exception as e:
+                print(colored(f"✗ {e}", Colors.RED))
+        else:
+            print(f"Worktree kept. Delete later with: fdev delete {feature}")
+
+
+def cmd_push(args: argparse.Namespace) -> int:
+    """Push branches to origin for all repos with commits."""
+    feature = get_feature(args)
+
+    if not worktree_exists(feature):
+        print(colored(f"Error: Worktree '{feature}' does not exist", Colors.RED))
+        return 1
+
+    worktree_path = WORKTREES_DIR / feature
+    repos = get_worktree_repos(feature)
+
+    print(colored(f"Pushing branches for: {feature}", Colors.BLUE))
+    print()
+
+    # Check status of each repo
+    repos_to_push = []
+    repos_with_uncommitted = []
+
+    for repo in repos:
+        repo_worktree = worktree_path / repo
+
+        # Check for uncommitted changes
+        result = run_git(repo_worktree, "status", "--porcelain", capture=True, check=False)
+        if result.stdout.strip():
+            repos_with_uncommitted.append(repo)
+            continue
+
+        # Check if branch has commits not on main
+        result = run_git(repo_worktree, "rev-list", f"main..{feature}", "--count", capture=True, check=False)
+        commit_count = int(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip().isdigit() else 0
+
+        if commit_count > 0:
+            repos_to_push.append((repo, commit_count))
+
+    # Warn about uncommitted changes
+    if repos_with_uncommitted:
+        print(colored("Warning: The following repos have uncommitted changes:", Colors.YELLOW))
+        for repo in repos_with_uncommitted:
+            print(f"  - {repo}")
+        print()
+
+    if not repos_to_push:
+        print(colored("No repos have commits to push.", Colors.YELLOW))
+        return 0
+
+    print(colored("Repos with changes:", Colors.CYAN))
+    for repo, count in repos_to_push:
+        print(f"  - {repo}: {count} commit(s)")
+    print()
+
+    # Push branches
+    pushed = []
+    for repo, _ in repos_to_push:
+        repo_worktree = worktree_path / repo
+
+        print(f"  {repo}...", end=" ")
+        try:
+            run_git(repo_worktree, "push", "-u", "origin", feature)
+            print(colored("✓", Colors.GREEN))
+            pushed.append(repo)
+        except subprocess.CalledProcessError as e:
+            print(colored(f"✗ {e}", Colors.RED))
+
+    if pushed:
+        print()
+        print(colored(f"Pushed {len(pushed)} repo(s): {', '.join(pushed)}", Colors.GREEN))
+
+    return 0
+
+
+def cmd_pr(args: argparse.Namespace) -> int:
+    """Create PRs for a feature across all repos with changes."""
+    feature = get_feature(args)
+
+    print(colored(f"Creating PRs for: {feature}", Colors.BLUE))
+    print()
+
+    created_prs = create_prs_for_feature(feature)
+
+    if created_prs:
+        print()
+        print(colored(f"Created/found {len(created_prs)} PR(s):", Colors.GREEN))
+        for repo, url in created_prs:
+            print(f"  - {repo}: {url}")
+
+    return 0
+
+
+def cmd_archive(args: argparse.Namespace) -> int:
+    """Archive a completed feature - cleanup worktrees, docs, and GitHub."""
+    feature = get_feature(args)
+    force = getattr(args, 'force', False)
+
+    if not worktree_exists(feature):
+        print(colored(f"Error: Worktree '{feature}' does not exist", Colors.RED))
+        return 1
+
+    worktree_path = WORKTREES_DIR / feature
+    repos = get_worktree_repos(feature)
+
+    print(colored(f"Archiving feature: {feature}", Colors.BLUE))
+    print()
+
+    # Phase 1: Pre-flight checks (unless --force)
+    if not force:
+        issues = []
+
+        # Check for uncommitted changes
+        for repo in repos:
+            repo_worktree = worktree_path / repo
+            result = run_git(repo_worktree, "status", "--porcelain", capture=True, check=False)
+            if result.stdout.strip():
+                issues.append(f"Uncommitted changes in {repo}")
+
+        # Check for open PRs
+        for repo in repos:
+            result = subprocess.run(
+                ["gh", "pr", "view", feature, "--repo", f"flovyn/{repo}", "--json", "state"],
+                capture_output=True, text=True, check=False
+            )
+            if result.returncode == 0:
+                pr_data = json.loads(result.stdout)
+                state = pr_data.get("state", "").upper()
+                if state == "OPEN":
+                    issues.append(f"Open PR in {repo}")
+
+        if issues:
+            print(colored("Pre-flight checks failed:", Colors.RED))
+            for issue in issues:
+                print(f"  - {issue}")
+            print()
+            print("Fix these issues or use --force to skip checks.")
+            return 1
+
+        # Confirm
+        print("This will:")
+        print(f"  - Archive docs to dev/docs/archive/{get_date_prefix()}_{feature}/")
+        print(f"  - Remove worktrees for: {', '.join(repos)}")
+        print(f"  - Kill tmux session '{feature}' (if exists)")
+        print(f"  - Update GitHub Project to 'Done'")
+        print()
+        response = input("Proceed? [y/N] ").strip().lower()
+        if response != "y":
+            print("Cancelled.")
+            return 1
+
+    print()
+
+    # Phase 2: Archive docs
+    print("Archiving docs...", end=" ")
+    docs = find_feature_docs(feature)
+    if docs["design"] or docs["plan"]:
+        class ArchiveArgs:
+            pass
+        archive_args = ArchiveArgs()
+        archive_args.feature = feature
+        # Call archive but suppress its output
+        result = cmd_docs_archive(archive_args)
+        if result == 0:
+            print(colored("✓", Colors.GREEN))
+        else:
+            print(colored("✗", Colors.RED))
+    else:
+        print(colored("(no docs found)", Colors.YELLOW))
+
+    # Phase 3: Kill tmux session
+    print("Killing tmux session...", end=" ")
+    if tmux_kill_session(feature):
+        print(colored("✓", Colors.GREEN))
+    else:
+        print(colored("(no session)", Colors.YELLOW))
+
+    # Phase 4: Update GitHub to Done
+    print("Updating GitHub Project...", end=" ")
+    try:
+        item = gh_find_item_by_branch(feature)
+        if item:
+            fields = gh_get_field_ids()
+            if "Status" in fields and "Done" in fields["Status"]["options"]:
+                gh_update_item_field(
+                    item["id"],
+                    fields["Status"]["id"],
+                    "Done",
+                    is_single_select=True,
+                    option_id=fields["Status"]["options"]["Done"]
+                )
+                print(colored("✓", Colors.GREEN))
+
+                # Update tracking section to Done
+                if item.get("repo") and item.get("issue_number"):
+                    summary = "### Status\n\n✅ **Completed**\n\nWorktrees removed. Docs archived."
+                    gh_update_issue_tracking(item["repo"], item["issue_number"], "Done", feature, summary)
+            else:
+                print(colored("(Phase field not found)", Colors.YELLOW))
+        else:
+            print(colored("(no GitHub item)", Colors.YELLOW))
+    except Exception as e:
+        print(colored(f"✗ {e}", Colors.RED))
+
+    # Phase 5: Remove worktrees
+    print("Removing worktrees...")
+    class DeleteArgs:
+        pass
+    delete_args = DeleteArgs()
+    delete_args.feature = feature
+    delete_args.force = True
+    delete_args.delete_branches = False
+    cmd_delete(delete_args)
+
+    print()
+    print(colored(f"Feature '{feature}' archived successfully!", Colors.GREEN))
+    return 0
+
+
+def cmd_docs_mv(args: argparse.Namespace) -> int:
+    """Move a doc from one type to another (e.g., research → design)."""
+    feature = args.feature
+    from_type = args.from_type
+    to_type = args.to_type
+
+    valid_types = ["research", "design", "plan"]
+    if from_type not in valid_types or to_type not in valid_types:
+        print(colored(f"Error: Invalid type. Valid types: {', '.join(valid_types)}", Colors.RED))
+        return 1
+
+    if from_type == to_type:
+        print(colored("Error: Source and destination types must be different", Colors.RED))
+        return 1
+
+    # Find source doc
+    source_doc = None
+    if from_type == "research":
+        source_doc = find_research_doc(feature)
+    elif from_type == "design":
+        docs = find_feature_docs(feature)
+        if docs["design"]:
+            source_doc = docs["design"][0]
+    elif from_type == "plan":
+        docs = find_feature_docs(feature)
+        if docs["plan"]:
+            source_doc = docs["plan"][0]
+
+    if not source_doc:
+        print(colored(f"Error: No {from_type} doc found for '{feature}'", Colors.RED))
+        return 1
+
+    print(colored(f"Moving {from_type} → {to_type}: {feature}", Colors.BLUE))
+    print(f"  Source: {source_doc.relative_to(DOCS_DIR)}")
+
+    # Determine target path
+    date_prefix = get_date_prefix()
+    if to_type == "design":
+        target_dir = DESIGN_DIR
+        target_name = f"{date_prefix}_{feature.replace('-', '_')}.md"
+    elif to_type == "plan":
+        target_dir = PLANS_DIR
+        target_name = f"{date_prefix}_{feature.replace('-', '_')}.md"
+    elif to_type == "research":
+        target_dir = RESEARCH_DIR
+        target_name = f"{date_prefix}_{feature.replace('-', '_')}.md"
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / target_name
+
+    if target_path.exists():
+        print(colored(f"Error: Target already exists: {target_path.relative_to(DOCS_DIR)}", Colors.RED))
+        return 1
+
+    # Read content and transform if needed
+    content = source_doc.read_text()
+
+    # Transform research → design
+    if from_type == "research" and to_type == "design":
+        # Update header
+        content = content.replace("# ", "# ", 1)  # Keep first header
+        content = content.replace(" - Research", "", 1)
+        content = content.replace("**Topic:**", "**Feature:**")
+        content = content.replace("## Objective", "## Problem Statement")
+        content = content.replace("## Recommendation", "## Solution")
+
+        # Add design doc header if not present
+        if "**Status:**" in content:
+            content = content.replace("**Status:** Implementing", "**Status:** Draft")
+            content = content.replace("**Status:** Complete", "**Status:** Draft")
+
+    # Move the file
+    print(f"  Moving to: {target_path.relative_to(DOCS_DIR)}...", end=" ")
+    shutil.move(str(source_doc), str(target_path))
+    print(colored("✓", Colors.GREEN))
+
+    print()
+    print(colored(f"Moved {from_type} doc to {to_type}/", Colors.GREEN))
+    print(f"  New location: {target_path.relative_to(DOCS_DIR)}")
+
+    if from_type == "research" and to_type == "design":
+        print()
+        print("Next steps:")
+        print(f"  fdev open {feature}    # Edit design doc")
+        print(f"  fdev pick {feature}    # Create full worktree (if research-only)")
+
+    return 0
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Flovyn development workflow manager",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  fdev create webhook-retry        Create worktrees + tmux session + Claude
+  fdev create auth-system --large  Create large feature with subdirectory
+  fdev create foo --no-session     Create without tmux session
+  fdev research retry-strategies   Create research worktree (dev/ only)
+  fdev attach webhook-retry        Attach to tmux session (with resume prompt)
+  fdev attach webhook-retry --no-resume  Attach without sending resume prompt
+  fdev sessions                    List all flovyn tmux sessions
+  fdev list                        List all local worktrees
+  fdev list --remote               List GitHub Project items
+  fdev list -r --status Backlog    List Backlog items from GitHub
+  fdev pick                        Pick from Backlog and create worktree
+  fdev pick --status Design        Pick from Design status
+  fdev pick --research             Pick Research items only
+  fdev move Planning               Move feature to Planning status
+  fdev sync                        Compare local vs GitHub items
+  fdev sync --update-progress      Sync and post progress to issues
+  fdev pr webhook-retry            Push branches and create PRs
+  fdev archive webhook-retry       Archive feature (cleanup after merge)
+  fdev archive webhook-retry -f    Force archive without checks
+  fdev status webhook-retry        Show git status
+  fdev commit webhook-retry -m "feat: add retry"
+  fdev env webhook-retry           Show allocated ports
+  fdev open webhook-retry          Open design doc in $EDITOR
+  fdev open webhook-retry -t plan  Open plan doc
+  fdev docs list webhook-retry     List all docs for feature
+  fdev docs mv topic research design  Move research doc to design
+  fdev docs promote webhook-retry  Convert to large feature structure
+  fdev docs archive webhook-retry  Archive completed feature docs
+  fdev delete webhook-retry        Delete worktrees + tmux session
+        """,
+    )
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # create
+    p_create = subparsers.add_parser("create", help="Create worktrees for a feature")
+    p_create.add_argument("feature", help="Feature name (used as branch name)")
+    p_create.add_argument("--large", action="store_true", help="Use large feature structure (subdirectory for docs)")
+    p_create.add_argument("--no-session", action="store_true", help="Don't create tmux session or launch Claude")
+    p_create.set_defaults(func=cmd_create)
+
+    # research
+    p_research = subparsers.add_parser("research", help="Create lightweight research worktree (dev/ only)")
+    p_research.add_argument("topic", help="Research topic (used as branch name)")
+    p_research.add_argument("--no-session", action="store_true", help="Don't create tmux session or launch Claude")
+    p_research.set_defaults(func=cmd_research)
+
+    # delete
+    p_delete = subparsers.add_parser("delete", help="Delete worktrees for a feature")
+    p_delete.add_argument("feature", help="Feature name")
+    p_delete.add_argument("-f", "--force", action="store_true", help="Force delete without confirmation")
+    p_delete.add_argument("--delete-branches", action="store_true", help="Also delete git branches")
+    p_delete.set_defaults(func=cmd_delete)
+
+    # status
+    p_status = subparsers.add_parser("status", help="Show git status for a feature")
+    p_status.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
+    p_status.add_argument("-v", "--verbose", action="store_true", help="Show detailed changes")
+    p_status.set_defaults(func=cmd_status)
+
+    # commit
+    p_commit = subparsers.add_parser("commit", help="Commit changes across repos")
+    p_commit.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
+    p_commit.add_argument("-m", "--message", required=True, help="Commit message")
+    p_commit.add_argument("-u", "--tracked-only", action="store_true", help="Only commit tracked files (no new files)")
+    p_commit.set_defaults(func=cmd_commit)
+
+    # list
+    p_list = subparsers.add_parser("list", help="List all worktrees or GitHub Project items")
+    p_list.add_argument("--remote", "-r", action="store_true", help="List items from GitHub Project instead of local worktrees")
+    p_list.add_argument("--status", help="Filter by status (Backlog, Research, Design, Planning, Implementing, Review, Done)")
+    p_list.add_argument("--kind", help="Filter by kind (Feature, Bug, Research)")
+    p_list.set_defaults(func=cmd_list)
+
+    # pick
+    p_pick = subparsers.add_parser("pick", help="Pick a task from GitHub Project and create worktree")
+    p_pick.add_argument("--status", default="Backlog", help="Filter by status (default: Backlog)")
+    p_pick.add_argument("--research", action="store_true", help="Pick Research items and create research worktree")
+    p_pick.set_defaults(func=cmd_pick)
+
+    # move
+    p_move = subparsers.add_parser("move", help="Move a feature to a new status in GitHub Project")
+    p_move.add_argument("status", help="New status (Backlog, Research, Design, Planning, Implementing, Review, Done)")
+    p_move.add_argument("feature", nargs="?", help="Feature/branch name (auto-detected if in worktree)")
+    p_move.add_argument("--no-prompt", dest="send_prompt", action="store_false",
+                        help="Don't send status-specific prompt to tmux session")
+    p_move.set_defaults(func=cmd_move, send_prompt=True)
+
+    # sync
+    p_sync = subparsers.add_parser("sync", help="Compare local worktrees with GitHub Project items")
+    p_sync.add_argument("--update-progress", action="store_true", help="Post progress updates to GitHub issues for Implementing items")
+    p_sync.set_defaults(func=cmd_sync)
+
+    # push
+    p_push = subparsers.add_parser("push", help="Push branches to origin (without creating PRs)")
+    p_push.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
+    p_push.set_defaults(func=cmd_push)
+
+    # pr
+    p_pr = subparsers.add_parser("pr", help="Push branches and create PRs for a feature")
+    p_pr.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
+    p_pr.set_defaults(func=cmd_pr)
+
+    # archive
+    p_archive = subparsers.add_parser("archive", help="Archive a completed feature (cleanup after merge)")
+    p_archive.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
+    p_archive.add_argument("-f", "--force", action="store_true", help="Skip pre-flight checks (uncommitted changes, open PRs)")
+    p_archive.set_defaults(func=cmd_archive)
+
+    # env
+    p_env = subparsers.add_parser("env", help="Show allocated ports for a feature")
+    p_env.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
+    p_env.set_defaults(func=cmd_env)
+
+    # open
+    p_open = subparsers.add_parser("open", help="Open design or plan doc in $EDITOR")
+    p_open.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
+    p_open.add_argument("-t", "--type", dest="type", default="design", choices=["design", "plan"], help="Doc type: design or plan (default: design)")
+    p_open.set_defaults(func=cmd_open)
+
+    # docs (with subcommands)
+    p_docs = subparsers.add_parser("docs", help="Manage feature documentation")
+    docs_subparsers = p_docs.add_subparsers(dest="docs_command", required=True)
+
+    # docs list <feature>
+    p_docs_list = docs_subparsers.add_parser("list", help="List docs for a feature")
+    p_docs_list.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
+    p_docs_list.set_defaults(func=cmd_docs)
+
+    # docs promote <feature>
+    p_docs_promote = docs_subparsers.add_parser("promote", help="Promote to large feature structure")
+    p_docs_promote.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
+    p_docs_promote.set_defaults(func=cmd_docs_promote)
+
+    # docs archive <feature>
+    p_docs_archive = docs_subparsers.add_parser("archive", help="Archive completed feature docs")
+    p_docs_archive.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
+    p_docs_archive.set_defaults(func=cmd_docs_archive)
+
+    # docs mv <feature> <from_type> <to_type>
+    p_docs_mv = docs_subparsers.add_parser("mv", help="Move doc between types (research, design, plan)")
+    p_docs_mv.add_argument("feature", help="Feature/topic name")
+    p_docs_mv.add_argument("from_type", choices=["research", "design", "plan"], help="Source doc type")
+    p_docs_mv.add_argument("to_type", choices=["research", "design", "plan"], help="Destination doc type")
+    p_docs_mv.set_defaults(func=cmd_docs_mv)
+
+    # attach
+    p_attach = subparsers.add_parser("attach", help="Attach to a feature's tmux session")
+    p_attach.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
+    p_attach.add_argument("--no-resume", action="store_true", help="Don't send resume prompt before attaching")
+    p_attach.set_defaults(func=cmd_attach)
+
+    # sessions
+    p_sessions = subparsers.add_parser("sessions", help="List all flovyn-related tmux sessions")
+    p_sessions.set_defaults(func=cmd_sessions)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

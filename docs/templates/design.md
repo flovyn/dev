@@ -3,6 +3,10 @@
 **Date:** {DATE}
 **Feature:** {feature}
 **Status:** Draft
+{issue_link}
+## Context
+
+{issue_body}
 
 ## Problem Statement
 
