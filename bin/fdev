@@ -1316,7 +1316,8 @@ def cmd_list(args: argparse.Namespace) -> int:
     status_filter = getattr(args, 'status', None)
     kind_filter = getattr(args, 'kind', None)
 
-    if remote:
+    # Status/kind filters imply remote since they're GitHub Project fields
+    if remote or status_filter or kind_filter:
         return cmd_list_remote(args, status_filter, kind_filter)
 
     # Local worktrees
