@@ -304,15 +304,22 @@ def is_large_feature(feature: str) -> bool:
     return (FEATURES_DIR / feature).exists()
 
 
-def find_feature_docs(feature: str) -> dict[str, list[Path]]:
+def find_feature_docs(feature: str, worktree: Optional[str] = None) -> dict[str, list[Path]]:
     """Find all docs for a feature. Returns dict with 'design', 'plan' keys.
 
-    Uses get_docs_dir() to find docs in worktree if running from one.
+    Args:
+        feature: Feature name to search for
+        worktree: If specified, look in this worktree's docs instead of using cwd detection
     """
     docs = {"design": [], "plan": []}
 
-    # Get context-aware docs directory (worktree or main)
-    docs_dir = get_docs_dir()
+    # Get docs directory - explicit worktree or context-aware
+    if worktree:
+        docs_dir = WORKTREES_DIR / worktree / "dev" / "docs"
+        if not docs_dir.exists():
+            docs_dir = get_docs_dir()
+    else:
+        docs_dir = get_docs_dir()
     design_dir = docs_dir / "design"
     plans_dir = docs_dir / "plans"
     features_dir = docs_dir / "features"
@@ -597,12 +604,16 @@ def get_design_prompt(feature: str, design_path: Optional[Path], issue_repo: Opt
     )
 
 
-def get_planning_prompt(feature: str) -> str:
+def get_planning_prompt(feature: str, worktree: Optional[str] = None) -> str:
     """Generate prompt for Planning phase - create implementation plan."""
     template = load_template(PROMPTS_DIR / "planning.md")
 
-    docs_dir = get_docs_dir()
-    docs = find_feature_docs(feature)
+    # Use worktree docs if specified
+    if worktree:
+        docs_dir = WORKTREES_DIR / worktree / "dev" / "docs"
+    else:
+        docs_dir = get_docs_dir()
+    docs = find_feature_docs(feature, worktree=worktree)
     design_path = f"dev/{docs['design'][0].relative_to(docs_dir.parent)}" if docs["design"] else "No design doc found"
 
     if is_large_feature(feature):
@@ -617,12 +628,16 @@ def get_planning_prompt(feature: str) -> str:
     )
 
 
-def get_implementation_prompt(feature: str) -> str:
+def get_implementation_prompt(feature: str, worktree: Optional[str] = None) -> str:
     """Generate prompt for Implementation phase - execute the plan."""
     template = load_template(PROMPTS_DIR / "implementation.md")
 
-    docs_dir = get_docs_dir()
-    docs = find_feature_docs(feature)
+    # Use worktree docs if specified
+    if worktree:
+        docs_dir = WORKTREES_DIR / worktree / "dev" / "docs"
+    else:
+        docs_dir = get_docs_dir()
+    docs = find_feature_docs(feature, worktree=worktree)
     plan_path = f"dev/{docs['plan'][0].relative_to(docs_dir.parent)}" if docs["plan"] else "No plan doc found"
 
     return template.substitute(
@@ -1086,18 +1101,11 @@ def cmd_create(args: argparse.Namespace) -> int:
         if tmux_create_session(feature, worktree_path):
             print(colored("✓", Colors.GREEN))
 
-            # Launch Claude Code
-            print(f"  Launching Claude Code...", end=" ")
-            tmux_send_keys(feature, "claude")
-            print(colored("✓", Colors.GREEN))
-
-            # Wait for Claude to initialize
-            time.sleep(2)
-
-            # Send Design phase prompt
-            print(f"  Sending Design phase prompt...", end=" ")
+            # Launch Claude Code with Design phase prompt
+            print(f"  Launching Claude Code with prompt...", end=" ")
             design_prompt = get_design_prompt(feature, design_path, issue_repo, issue_number)
-            tmux_send_keys(feature, design_prompt)
+            escaped_prompt = shlex.quote(design_prompt)
+            tmux_send_keys(feature, f"claude {escaped_prompt}")
             print(colored("✓", Colors.GREEN))
         else:
             print(colored("(already exists)", Colors.YELLOW))
@@ -1632,16 +1640,11 @@ def cmd_attach(args: argparse.Namespace) -> int:
                 tmux_create_session(feature, worktree_path)
                 print(colored("✓", Colors.GREEN))
 
-                print(f"  Launching Claude Code...", end=" ")
-                tmux_send_keys(feature, "claude")
-                print(colored("✓", Colors.GREEN))
-
-                time.sleep(2)
-
-                # Send resume prompt since worktree already exists
-                print(f"  Sending resume prompt...", end=" ")
+                # Launch Claude with resume prompt since worktree already exists
+                print(f"  Launching Claude Code with prompt...", end=" ")
                 resume_prompt = get_resume_prompt(feature)
-                tmux_send_keys(feature, resume_prompt)
+                escaped_prompt = shlex.quote(resume_prompt)
+                tmux_send_keys(feature, f"claude {escaped_prompt}")
                 print(colored("✓", Colors.GREEN))
             else:
                 print("Cancelled.")
@@ -1928,17 +1931,17 @@ def cmd_move(args: argparse.Namespace) -> int:
             print()
             if new_status == "Design":
                 print(colored("Starting Claude for Design status...", Colors.YELLOW))
-                docs = find_feature_docs(feature)
+                docs = find_feature_docs(feature, worktree=feature)
                 design_path = docs["design"][0] if docs["design"] else None
                 issue_repo = item.get("repo")
                 issue_number = item.get("issue_number")
                 prompt = get_design_prompt(feature, design_path, issue_repo, issue_number)
             elif new_status == "Planning":
                 print(colored("Starting Claude for Planning status...", Colors.YELLOW))
-                prompt = get_planning_prompt(feature)
+                prompt = get_planning_prompt(feature, worktree=feature)
             else:  # Implementing
                 print(colored("Starting Claude for Implementing status...", Colors.YELLOW))
-                prompt = get_implementation_prompt(feature)
+                prompt = get_implementation_prompt(feature, worktree=feature)
 
             # Start Claude with the prompt as initial message
             print(f"  Launching Claude Code with prompt...", end=" ")
@@ -2131,18 +2134,11 @@ def cmd_research(args: argparse.Namespace) -> int:
         if tmux_create_session(topic, worktree_path):
             print(colored("✓", Colors.GREEN))
 
-            # Launch Claude Code
-            print(f"  Launching Claude Code...", end=" ")
-            tmux_send_keys(topic, "claude")
-            print(colored("✓", Colors.GREEN))
-
-            # Wait for Claude to initialize
-            time.sleep(2)
-
-            # Send research prompt
-            print(f"  Sending research prompt...", end=" ")
+            # Launch Claude Code with research prompt
+            print(f"  Launching Claude Code with prompt...", end=" ")
             research_prompt = get_research_prompt(topic, research_path)
-            tmux_send_keys(topic, research_prompt)
+            escaped_prompt = shlex.quote(research_prompt)
+            tmux_send_keys(topic, f"claude {escaped_prompt}")
             print(colored("✓", Colors.GREEN))
         else:
             print(colored("(already exists)", Colors.YELLOW))
