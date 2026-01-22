@@ -2426,7 +2426,7 @@ def merge_and_cleanup_feature(feature: str) -> None:
         print()
         print(colored("Updating main branches...", Colors.CYAN))
         for repo in merged_prs:
-            main_repo_path = WORKSPACE_ROOT / repo
+            main_repo_path = FLOVYN_ROOT / repo
             if not main_repo_path.exists():
                 continue
 
