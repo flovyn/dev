@@ -307,7 +307,10 @@ def delete_worktree(feature: str, force: bool = False, delete_branches: bool = F
             continue
 
         try:
-            run_git(repo_path, "worktree", "remove", str(target_path), "--force" if force else None)
+            if force:
+                run_git(repo_path, "worktree", "remove", str(target_path), "--force")
+            else:
+                run_git(repo_path, "worktree", "remove", str(target_path))
         except subprocess.CalledProcessError:
             # Try to remove manually if git worktree fails
             shutil.rmtree(target_path)
