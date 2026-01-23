@@ -12,7 +12,10 @@
       "Bash(xargs kill:*)",
       "Bash(mise tasks:*)",
       "Bash(mise trust:*)",
-      "Bash(mise run:*)"
+      "Bash(mise run:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker ps:*)",
+      "Bash(ss -tlnp:*)"
     ]
   }
 }

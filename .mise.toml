@@ -91,43 +91,33 @@ description = "Open API docs"
 run = "open http://localhost:8000/api/docs"
 
 # SDK Examples (Rust)
-# FLOVYN_GRPC_SERVER_URL is computed from SERVER_GRPC_PORT
+# Loads .env from dev directory automatically via DOTENV_PATH
 [tasks."example:hello"]
 description = "Run hello-world example worker"
-run = """
-source .env 2>/dev/null || true
-export FLOVYN_GRPC_SERVER_URL="http://localhost:${SERVER_GRPC_PORT:-9090}"
-cd ../sdk-rust && DOTENV_PATH=../dev/.env cargo run -p hello-world-sample
-"""
+dir = "../sdk-rust"
+run = "cargo run -p hello-world-sample"
+env = { DOTENV_PATH = "../dev/.env" }
 
 [tasks."example:ecommerce"]
 description = "Run ecommerce example worker"
-run = """
-source .env 2>/dev/null || true
-export FLOVYN_GRPC_SERVER_URL="http://localhost:${SERVER_GRPC_PORT:-9090}"
-cd ../sdk-rust && DOTENV_PATH=../dev/.env cargo run -p ecommerce-sample
-"""
+dir = "../sdk-rust"
+run = "cargo run -p ecommerce-sample"
+env = { DOTENV_PATH = "../dev/.env" }
 
 [tasks."example:pipeline"]
 description = "Run data-pipeline example worker"
-run = """
-source .env 2>/dev/null || true
-export FLOVYN_GRPC_SERVER_URL="http://localhost:${SERVER_GRPC_PORT:-9090}"
-cd ../sdk-rust && DOTENV_PATH=../dev/.env cargo run -p data-pipeline-sample
-"""
+dir = "../sdk-rust"
+run = "cargo run -p data-pipeline-sample"
+env = { DOTENV_PATH = "../dev/.env" }
 
 [tasks."example:patterns"]
 description = "Run patterns example worker"
-run = """
-source .env 2>/dev/null || true
-export FLOVYN_GRPC_SERVER_URL="http://localhost:${SERVER_GRPC_PORT:-9090}"
-cd ../sdk-rust && DOTENV_PATH=../dev/.env cargo run -p patterns-sample
-"""
+dir = "../sdk-rust"
+run = "cargo run -p patterns-sample"
+env = { DOTENV_PATH = "../dev/.env" }
 
 [tasks."example:standalone"]
 description = "Run standalone-tasks example worker"
-run = """
-source .env 2>/dev/null || true
-export FLOVYN_GRPC_SERVER_URL="http://localhost:${SERVER_GRPC_PORT:-9090}"
-cd ../sdk-rust && DOTENV_PATH=../dev/.env cargo run -p standalone-tasks-sample
-"""
+dir = "../sdk-rust"
+run = "cargo run -p standalone-tasks-sample"
+env = { DOTENV_PATH = "../dev/.env" }

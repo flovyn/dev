@@ -135,6 +135,10 @@ start_server() {
     export RUST_LOG="${RUST_LOG:-info,flovyn_server=debug}"
     export WORKER_TOKEN_SECRET="${WORKER_TOKEN_SECRET:-dev-secret-key-for-testing-only}"
 
+    # Override database and NATS URLs from .env ports
+    export DATABASE_URL="postgres://flovyn:flovyn@localhost:${SERVER_POSTGRES_PORT:-5435}/flovyn"
+    export NATS__URL="nats://localhost:${NATS_PORT:-4222}"
+
     # Set ports (only if not already set)
     export SERVER_PORT="$server_http_port"
     export GRPC_SERVER_PORT="$server_grpc_port"
@@ -162,13 +166,17 @@ start_app() {
     local app_port="${PORT:-${APP_PORT:-3000}}"
     local app_url="${APP_URL:-http://localhost:$app_port}"
 
+    local server_http_port="${SERVER_HTTP_PORT:-8000}"
+
     export DATABASE_URL="postgresql://flovyn-app:flovyn-app@localhost:${APP_POSTGRES_PORT:-5433}/flovyn-app"
     export BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-dev-secret-key-for-testing-only}"
     export NEXT_PUBLIC_APP_URL="$app_url"
+    export BACKEND_URL="http://localhost:${server_http_port}"
     export PORT="$app_port"
 
     echo -e "  Database: $DATABASE_URL"
     echo -e "  App URL:  $app_url"
+    echo -e "  Backend:  $BACKEND_URL"
     echo -e "  Port:     $app_port"
     echo ""
 
