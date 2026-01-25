@@ -37,6 +37,7 @@ REPOS = [
     "sdk-rust",
     "sdk-kotlin",
     "sdk-python",
+    "sdk-typescript"
 ]
 
 # Base ports (offset 0 = main branch)

@@ -1,18 +1,14 @@
-# Improve Frontend Exprience
+# Experiment New Design For Flovyn App
 
 **Date:** 2026-01-22
-**Feature:** improve-frontend-exprience
+**Feature:** experiment-new-design-for-flovyn-app
 **Status:** Draft
 
-**Issue:** [flovyn/flovyn-app#1](https://github.com/flovyn/flovyn-app/issues/1)
+**Issue:** [flovyn/flovyn-app#2](https://github.com/flovyn/flovyn-app/issues/2)
 
 ## Context
 
-Currently,  we have many inconsistency in the frontend UI:
-- The data grid doesn't always have pagination
-- The page hierarchy is to be reorganized on the sidebar
-- The workflow timeline streaming is not confirmed to work yet
-- The improvement from Webhook: dev/blob/main/docs/plans/20260121_fix_webhook_issues.md
+The current design is a bit too rigid, we need to make it more modern
 
 ## Problem Statement
 

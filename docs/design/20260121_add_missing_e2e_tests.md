@@ -1,18 +1,8 @@
-# Improve Frontend Exprience
+# Add Missing E2E Tests
 
-**Date:** 2026-01-22
-**Feature:** improve-frontend-exprience
+**Date:** 2026-01-21
+**Feature:** add-missing-e2e-tests
 **Status:** Draft
-
-**Issue:** [flovyn/flovyn-app#1](https://github.com/flovyn/flovyn-app/issues/1)
-
-## Context
-
-Currently,  we have many inconsistency in the frontend UI:
-- The data grid doesn't always have pagination
-- The page hierarchy is to be reorganized on the sidebar
-- The workflow timeline streaming is not confirmed to work yet
-- The improvement from Webhook: dev/blob/main/docs/plans/20260121_fix_webhook_issues.md
 
 ## Problem Statement
 

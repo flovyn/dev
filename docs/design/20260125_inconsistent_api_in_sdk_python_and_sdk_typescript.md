@@ -1,18 +1,14 @@
-# Improve Frontend Exprience
+# Inconsistent Api In Sdk Python And Sdk Typescript
 
-**Date:** 2026-01-22
-**Feature:** improve-frontend-exprience
+**Date:** 2026-01-25
+**Feature:** inconsistent-api-in-sdk-python-and-sdk-typescript
 **Status:** Draft
 
-**Issue:** [flovyn/flovyn-app#1](https://github.com/flovyn/flovyn-app/issues/1)
+**Issue:** [flovyn/flovyn-server#9](https://github.com/flovyn/flovyn-server/issues/9)
 
 ## Context
 
-Currently,  we have many inconsistency in the frontend UI:
-- The data grid doesn't always have pagination
-- The page hierarchy is to be reorganized on the sidebar
-- The workflow timeline streaming is not confirmed to work yet
-- The improvement from Webhook: dev/blob/main/docs/plans/20260121_fix_webhook_issues.md
+<!-- Describe the context and background for this feature -->
 
 ## Problem Statement
 
