@@ -176,10 +176,11 @@
   - To `Wait.forHttp('/api/health/ready', 3000)`
   - Update `flovyn-app/tests/e2e/harness.ts:200`
 
-- [ ] **5.3** Run E2E tests to verify
+- [x] **5.3** Run E2E tests to verify
   - Build both Docker images with changes
-  - Run full E2E test suite
+  - Run full E2E test suite (138 passed, 27 skipped, 1 unrelated failure)
   - Verify containers start correctly with new health checks
+  - Note: Changed flovyn-app wait strategy to `/api/health/live` (liveness probe is correct for container startup)
 
 ---
 
