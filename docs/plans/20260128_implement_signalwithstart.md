@@ -131,34 +131,40 @@ NOTE: Queue-based semantics (per signal name) to be added as needed
 
 ### 1.10 Workflow Context
 
-- [ ] Update `sdk-rust/worker-sdk/src/workflow/context.rs` (trait):
-  - Add `async fn wait_for_signal<T: DeserializeOwned>(&self, name: &str) -> Result<T>`
-  - Add `fn has_signal(&self, name: &str) -> bool`
-  - Add `fn drain_signals<T: DeserializeOwned>(&self, name: &str) -> Result<Vec<T>>`
+- [x] Update `sdk-rust/worker-sdk/src/workflow/context.rs` (trait):
+  - Added `fn wait_for_signal_raw(&self) -> SignalFutureRaw` - waits for next signal (returns Signal with name and value)
+  - Added `fn has_signal(&self) -> bool` - check if any signals pending
+  - Added `fn pending_signal_count(&self) -> usize` - get pending signal count
+  - Added `fn drain_signals_raw(&self) -> Vec<(String, Value)>` - drain all signals
 
-- [ ] Update `sdk-rust/worker-sdk/src/workflow/context_impl.rs`:
-  - Implement `wait_for_signal()`:
-    - Check replay engine signal queue first
-    - If signal present, deserialize and return
-    - If no signal, suspend workflow (set suspension cell)
-  - Implement `has_signal()` - check queue without consuming
-  - Implement `drain_signals()` - drain all signals from queue
+- [x] Update `sdk-rust/worker-sdk/src/workflow/context_impl.rs`:
+  - Implemented `wait_for_signal_raw()` - checks replay engine, returns signal or suspends
+  - Implemented `has_signal()` - checks replay engine
+  - Implemented `pending_signal_count()` - gets count from replay engine
+  - Implemented `drain_signals_raw()` - drains all signals from queue
 
-- [ ] Create `sdk-rust/worker-sdk/src/workflow/signal.rs`:
-  - `SignalFuture<T>` struct (similar to PromiseFuture pattern)
-  - Implement `Future` trait
-  - Implement `WorkflowFuturePoll` trait
-
-- [ ] Update `sdk-rust/worker-sdk/src/workflow/future.rs`:
-  - Export signal future types
+- [x] Update `sdk-rust/worker-sdk/src/workflow/future.rs`:
+  - Added `Signal` struct with name and value fields
+  - Added `SignalFuture` struct (similar to PromiseFuture pattern)
+  - Added `SignalFutureRaw` type alias
+  - Implemented `Future` and `WorkflowFuturePoll` traits
 
 ### 1.11 Client API
 
-- [ ] Update `sdk-rust/worker-sdk/src/client/flovyn_client.rs`:
-  - Add `signal_with_start_workflow(options: SignalWithStartOptions) -> Result<SignalWithStartResponse>`
-  - Add `signal_workflow(execution_id: &str, signal_name: &str, value: impl Serialize) -> Result<SignalResponse>`
-  - Add `SignalWithStartOptions` struct
-  - Add response types
+- [x] Update `sdk-rust/worker-sdk/src/client/flovyn_client.rs`:
+  - Added `signal_with_start_workflow(options: SignalWithStartOptions) -> Result<SignalWithStartResult>`
+  - Added `signal_workflow(workflow_execution_id: Uuid, signal_name: &str, value: Value) -> Result<SignalResult>`
+  - Added `SignalWithStartOptions` struct with builder methods
+  - Added `SignalWithStartResult` and `SignalResult` structs
+
+- [x] Update `sdk-rust/worker-core/src/client/workflow_dispatch.rs`:
+  - Added `signal_with_start_workflow()` gRPC wrapper
+  - Added `signal_workflow()` gRPC wrapper
+  - Added `SignalWithStartResult` and `SignalResult` structs
+
+- [x] Update `sdk-rust/proto/flovyn.proto`:
+  - Added `SignalWithStartWorkflow` and `SignalWorkflow` RPCs
+  - Added request/response message definitions
 
 ### 1.12 FFI Layer (for Python/Kotlin)
 
@@ -166,15 +172,18 @@ NOTE: Queue-based semantics (per signal name) to be added as needed
   - Added `SignalReceived` variant to `FfiEventType` enum
   - Added bidirectional conversions
 
-- [ ] Update `sdk-rust/worker-ffi/src/context.rs`:
-  - Add `wait_for_signal(name: String) -> FfiSignalResult` FFI binding
-  - Add `has_signal(name: String) -> bool` FFI binding
-  - Add `drain_signals(name: String) -> Vec<FfiSignalEvent>` FFI binding
-  - Add `FfiSignalResult` enum (Received/Pending variants)
+- [x] Update `sdk-rust/worker-ffi/src/context.rs`:
+  - Added `wait_for_signal() -> FfiSignalResult` FFI binding
+  - Added `has_signal() -> bool` FFI binding
+  - Added `pending_signal_count() -> u32` FFI binding
+  - Added `drain_signals() -> Vec<FfiSignalEvent>` FFI binding
+  - Added `FfiSignalResult` enum (Received/Pending variants)
+  - Added `FfiSignalEvent` record struct
 
-- [ ] Update `sdk-rust/worker-ffi/src/client.rs`:
+- [x] Update `sdk-rust/worker-ffi/src/client.rs`:
   - Add `signal_with_start_workflow(...)` FFI binding
   - Add `signal_workflow(...)` FFI binding
+  - Add `SignalWithStartResponse` and `SignalWorkflowResponse` result types
 
 ### 1.13 NAPI Layer (for TypeScript)
 
@@ -182,30 +191,38 @@ NOTE: Queue-based semantics (per signal name) to be added as needed
   - Added `SignalReceived` variant to `NapiEventType` enum
   - Added bidirectional conversions
 
-- [ ] Update `sdk-rust/worker-napi/src/context.rs`:
-  - Add NAPI bindings for signal context methods
+- [x] Update `sdk-rust/worker-napi/src/context.rs`:
+  - Added `wait_for_signal() -> SignalResult` NAPI binding
+  - Added `has_signal() -> bool` NAPI binding
+  - Added `pending_signal_count() -> u32` NAPI binding
+  - Added `drain_signals() -> Vec<SignalEvent>` NAPI binding
+  - Added `SignalResult` object struct
+  - Added `SignalEvent` object struct
 
 - [ ] Update `sdk-rust/worker-napi/src/client.rs`:
-  - Add NAPI bindings for client signal methods
+  - Add NAPI bindings for client signal methods (deferred - can use gRPC directly)
 
 ### 1.14 Testing Infrastructure
 
-- [ ] Update `sdk-rust/worker-sdk/src/testing/mock_workflow_context.rs`:
-  - Add `mock_signal(name: &str, value: serde_json::Value)` method
-  - Add signal tracking: `received_signals: Vec<(String, Value)>`
+- [x] Update `sdk-rust/worker-sdk/src/testing/mock_workflow_context.rs`:
+  - Added `mock_signal(name: &str, value: serde_json::Value)` builder method
+  - Added `signal_queue: Vec<(String, Value)>` for mock signals
+  - Implemented signal context methods (wait_for_signal_raw, has_signal, pending_signal_count, drain_signals_raw)
 
 - [ ] Update `sdk-rust/worker-sdk/src/testing/builders.rs`:
-  - Add signal test builders if needed
+  - Add signal test builders if needed (deferred - not needed for basic testing)
 
 ### 1.15 SDK-Rust Tests
 
-- [ ] Create `sdk-rust/worker-sdk/tests/e2e/signal_tests.rs`:
-  - Test `wait_for_signal()` receives signal value
-  - Test multiple signals with same name (queue semantics)
-  - Test `has_signal()` returns true/false correctly
-  - Test `drain_signals()` returns all buffered signals
-  - Test signal replay (workflow crashes and restarts)
-  - Test signal before `wait_for_signal()` is called (buffered)
+- [x] Create `sdk-rust/worker-sdk/tests/e2e/signal_tests.rs`:
+  - [x] Test `signal_with_start_new_workflow` - workflow created with signal
+  - [x] Test `signal_existing_workflow` - signal sent to running workflow
+  - [x] Test `multiple_signals` - multiple signals received in order
+  - [x] Test `signal_with_start_existing` - idempotency (second call sends signal only)
+  - [x] Test `signal_check_and_drain` - has_signal and drain_signals APIs
+
+- [x] **Bug fix**: Added `"SIGNAL_RECEIVED" => EventType::SignalReceived` to `parse_event_type()` in `workflow_worker.rs`
+  - This was the root cause of signal tests failing - all SIGNAL_RECEIVED events were being parsed as WorkflowStarted
 
 - [ ] Create `sdk-rust/examples/patterns/src/signal_workflow.rs`:
   - Example conversation workflow using signals
@@ -216,38 +233,46 @@ NOTE: Queue-based semantics (per signal name) to be added as needed
 
 ### 1.16 Regenerate FFI Bindings
 
-- [ ] Run FFI regeneration script to update `flovyn/_native/flovyn_worker_ffi.py`
+- [x] Run FFI regeneration script to update `flovyn/_native/flovyn_worker_ffi.py`
   - This pulls new signal types from sdk-rust worker-ffi
+  - Also added `signal_with_start_workflow()` and `signal_workflow()` FFI client methods
 
 ### 1.17 Context Implementation
 
-- [ ] Update `flovyn/context.py`:
-  - Update `wait_for_signal()` implementation (currently proxies to promise)
-  - Implement proper signal semantics using FFI `wait_for_signal()`
-  - Add `has_signal(name: str) -> bool` method
-  - Add `drain_signals(name: str, type_hint: type[T]) -> list[T]` method
+- [x] Update `flovyn/context.py`:
+  - Update `wait_for_signal()` implementation (now uses FFI properly)
+  - Add `has_signal() -> bool` method
+  - Add `pending_signal_count() -> int` method
+  - Add `drain_signals(type_hint: type[T]) -> list[T]` method
 
 ### 1.18 Client Implementation
 
-- [ ] Update `flovyn/client.py`:
+- [x] Update `flovyn/client.py`:
   - Add `signal_with_start_workflow()` method
   - Add `signal_workflow()` method
-  - Update `_create_workflow_handle()` to implement `send_signal()` (currently `pass`)
+  - Update `_create_workflow_handle()` to implement `send_signal()`
 
 ### 1.19 Testing
 
-- [ ] Update `flovyn/testing/mocks.py`:
+- [x] Update `flovyn/testing/mocks.py`:
   - Update `mock_signal_value()` to support queue semantics (multiple values per name)
   - Update `MockWorkflowContext.wait_for_signal()` implementation
+  - Add `has_signal()`, `pending_signal_count()`, and `drain_signals()` methods
 
-- [ ] Create `tests/e2e/test_signal.py`:
+- [x] Create `tests/e2e/test_signal.py`:
   - Test `wait_for_signal()` receives signal
   - Test `signal_with_start_workflow()` creates and signals
   - Test multiple signals with same name
-  - Test signal replay after workflow restart
+  - Test signal_with_start on existing workflow
 
-- [ ] Update `tests/e2e/fixtures/workflows.py`:
+- [x] Update `tests/e2e/fixtures/workflows.py`:
   - Add `SignalWorkflow` fixture that waits for signals
+  - Add `MultiSignalWorkflow` for multiple signal testing
+  - Add `DrainSignalsWorkflow` for has_signal/drain_signals testing
+
+- [x] Update `flovyn/testing/environment.py`:
+  - Add `signal_workflow()` method
+  - Add `signal_with_start_workflow()` method
 
 ---
 
@@ -255,42 +280,52 @@ NOTE: Queue-based semantics (per signal name) to be added as needed
 
 ### 1.20 Regenerate FFI Bindings
 
-- [ ] Run `./bin/dev/update-native.sh` to regenerate UniFFI bindings
+- [x] Run `./bin/dev/update-native.sh` to regenerate UniFFI bindings
   - Updates `worker-native/uniffi/flovyn_worker_ffi/flovyn_worker_ffi.kt`
+  - Now includes `signalWorkflow`, `signalWithStartWorkflow`, `FfiSignalResult`, etc.
 
 ### 1.21 Signal Types
 
-- [ ] Create `worker-sdk/src/main/kotlin/ai/flovyn/sdk/workflow/DurableSignal.kt`:
-  - `DurableSignal<T>` interface
-  - `ReceivedDurableSignal<T>` implementation
-  - `PendingDurableSignal<T>` implementation
+- [x] Create `worker-sdk/src/main/kotlin/ai/flovyn/sdk/workflow/Signal.kt`:
+  - `Signal<T>` data class with `name` and `value` fields
+  - Simpler than DurablePromise (no await logic needed)
 
 ### 1.22 Context Implementation
 
-- [ ] Update `worker-sdk/src/main/kotlin/ai/flovyn/sdk/workflow/WorkflowContext.kt`:
-  - Add `suspend fun <T> waitForSignal(name: String): T`
-  - Add `fun hasSignal(name: String): Boolean`
-  - Add `suspend fun <T> drainSignals(name: String): List<T>`
+- [x] Update `worker-sdk/src/main/kotlin/ai/flovyn/sdk/workflow/WorkflowContext.kt`:
+  - Add `suspend fun <T> waitForSignal(): Signal<T>`
+  - Add `fun hasSignal(): Boolean`
+  - Add `fun pendingSignalCount(): Int`
+  - Add `suspend fun <T> drainSignals(): List<Signal<T>>`
 
-- [ ] Update `worker-sdk/src/main/kotlin/ai/flovyn/sdk/workflow/WorkflowContextImpl.kt`:
+- [x] Update `worker-sdk/src/main/kotlin/ai/flovyn/sdk/workflow/WorkflowContextImpl.kt`:
   - Implement signal methods using FFI bindings
 
 ### 1.23 Client Implementation
 
-- [ ] Update `worker-sdk/src/main/kotlin/ai/flovyn/sdk/client/FlovynClient.kt`:
+- [x] Update `worker-sdk/src/main/kotlin/ai/flovyn/sdk/client/FlovynClient.kt`:
   - Add `signalWithStartWorkflow()` method
   - Add `signalWorkflow()` method
+  - Add `SignalWithStartOptions` and `SignalWithStartResult` data classes
 
-- [ ] Update `worker-sdk/src/main/kotlin/ai/flovyn/core/CoreClientBridge.kt`:
+- [x] Update `worker-sdk/src/main/kotlin/ai/flovyn/core/CoreClientBridge.kt`:
   - Add bridge methods for signal operations
 
 ### 1.24 Testing
 
-- [ ] Update `worker-sdk-jackson/src/test/kotlin/ai/flovyn/sdk/e2e/fixtures/Workflows.kt`:
-  - Add `SignalWorkflow` fixture
+- [x] Update `worker-sdk-jackson/src/test/kotlin/ai/flovyn/sdk/e2e/fixtures/Workflows.kt`:
+  - Added `SignalWorkflow`, `MultiSignalWorkflow`, `SignalCheckWorkflow` fixtures
 
-- [ ] Create `worker-sdk-jackson/src/test/kotlin/ai/flovyn/sdk/e2e/SignalE2ETest.kt`:
-  - Test signal operations
+- [x] Create `worker-sdk-jackson/src/test/kotlin/ai/flovyn/sdk/e2e/SignalE2ETest.kt`:
+  - Test signal-with-start new workflow
+  - Test signal existing workflow
+  - Test multiple signals
+  - Test signal-with-start existing workflow
+  - Test signal check and drain
+
+- [x] Update `worker-sdk-jackson/src/test/kotlin/ai/flovyn/sdk/e2e/E2ETestEnvironment.kt`:
+  - Added `signalWorkflow()` method
+  - Added `signalWithStartWorkflow()` method
 
 ---
 
@@ -331,11 +366,19 @@ NOTE: Queue-based semantics (per signal name) to be added as needed
 - [ ] Update `packages/sdk/src/testing/mock-workflow-context.ts`:
   - Add signal mocking methods
 
-- [ ] Create `tests/e2e/signal.test.ts`:
-  - Test signal operations
+- [x] Create `tests/e2e/signal.test.ts`:
+  - Test signal-with-start new workflow
+  - Test signal existing workflow
+  - Test multiple signals
+  - Test signal-with-start existing workflow
+  - Test signal check and drain
 
-- [ ] Update `tests/e2e/fixtures/workflows.ts`:
-  - Add signal workflow fixtures
+- [x] Update `tests/e2e/fixtures/workflows.ts`:
+  - Added `signalWorkflow`, `multiSignalWorkflow`, `signalCheckWorkflow` fixtures
+
+- [x] Update `packages/sdk/src/testing/test-environment.ts`:
+  - Added `signalWorkflow()` method
+  - Added `signalWithStartWorkflow()` method
 
 ---
 
@@ -343,44 +386,47 @@ NOTE: Queue-based semantics (per signal name) to be added as needed
 
 ### 1.30 Event Span Types
 
-- [ ] Update `flovyn-app/apps/web/lib/types/event-spans.ts`:
-  - Add `SIGNAL = "SIGNAL"` to `SpanType` enum
-  - Add signal-specific fields: `signalId?: string`, `signalName?: string`, `signalValue?: unknown`
+- [x] Update `flovyn-app/apps/web/lib/types/event-spans.ts`:
+  - Added `SIGNAL = "SIGNAL"` to `SpanType` enum
+  - Added signal-specific fields: `signalId?: string`, `signalName?: string`, `signalValue?: unknown`
 
 ### 1.31 Event Processing
 
-- [ ] Update `flovyn-app/apps/web/lib/event-processing/buildEventSpans.ts`:
-  - Add `case "SIGNAL_RECEIVED":` handler
+- [x] Update `flovyn-app/apps/web/lib/event-processing/buildEventSpans.ts`:
+  - Added `case "SIGNAL_RECEIVED":` handler
   - Create span for each signal event (not merged like promises)
   - Store signal name and value in span properties
   - Handle instance numbering for multiple signals with same name
 
 ### 1.32 Signal Details Panel
 
-- [ ] Create `flovyn-app/apps/web/components/events/SignalDetailsPanel.tsx`:
+- [x] Create `flovyn-app/apps/web/components/events/SignalDetailsPanel.tsx`:
   - Follow PromiseDetailsPanel pattern but simpler (no action buttons)
   - Display signal name, value, and timestamp
   - Show in Events tab of workflow detail view
 
 ### 1.33 Panel Integration
 
-- [ ] Update `flovyn-app/apps/web/components/events/EventDetailPanel.tsx`:
-  - Add case for `SpanType.SIGNAL` to show SignalDetailsPanel
+- [x] Update `flovyn-app/apps/web/components/events/TimelineTaskDetailPanel.tsx`:
+  - Added case for `SpanType.SIGNAL` to show SignalDetailsPanel
+  - Added import for SignalDetailsPanel
 
 ### 1.34 API Package
 
-- [ ] Regenerate `flovyn-app/packages/api/` from updated server OpenAPI spec
-  - New signal types and hooks will be auto-generated
+- [x] Regenerate `flovyn-app/packages/api/` from updated server OpenAPI spec
+  - New signal types and hooks auto-generated
+  - Fixed post-generate.sh to work on Linux (use portable sed syntax)
 
 ### 1.35 Frontend Tests
 
-- [ ] Update `flovyn-app/apps/web/lib/event-processing/__tests__/buildEventSpans.test.ts`:
-  - Add tests for `SIGNAL_RECEIVED` event handling
-  - Test multiple signals with same name
-  - Test signal span properties
+- [x] Update `flovyn-app/apps/web/lib/event-processing/__tests__/buildEventSpans.test.ts`:
+  - Added tests for `SIGNAL_RECEIVED` event handling
+  - Test multiple signals with same name (instance numbering)
+  - Test signal span properties (id, name, value)
+  - Test mixed workflow with tasks and signals
 
 - [ ] Update `flovyn-app/apps/web/lib/test-utils/mocks/eventSpanFactory.ts`:
-  - Add signal event fixtures
+  - Add signal event fixtures (deferred - not needed for current tests)
 
 ---
 
@@ -388,28 +434,33 @@ NOTE: Queue-based semantics (per signal name) to be added as needed
 
 ### 1.36 Route Configuration
 
-- [ ] Update `flovyn-server/plugins/eventhook/src/domain/route.rs`:
-  - Add `SignalWithStart(SignalWithStartTargetConfig)` variant to `TargetConfig` enum
-  - Create `SignalWithStartTargetConfig` struct:
-    ```rust
-    pub struct SignalWithStartTargetConfig {
-        pub workflow_kind: String,
-        pub workflow_id_path: String,  // JMESPath to extract workflow ID
-        pub signal_name: String,
-        pub signal_value_path: Option<String>,  // JMESPath for signal value (defaults to full payload)
-        pub queue: Option<String>,
-    }
-    ```
+- [x] Update `flovyn-server/plugins/eventhook/src/domain/route.rs`:
+  - Added `SignalWithStart(SignalWithStartTargetConfig)` variant to `TargetConfig` enum
+  - Created `SignalWithStartTargetConfig` struct with workflow_kind, workflow_id_path, signal_name, signal_value_path, queue, workflow_version
 
 ### 1.37 Processor Implementation
 
-- [ ] Update `flovyn-server/plugins/eventhook/src/service/processor.rs`:
-  - Add `TargetConfig::SignalWithStart` handling in `execute_target()`
-  - Call server's `SignalWithStartWorkflow` RPC or internal method
+- [x] Update `flovyn-server/plugins/eventhook/src/service/processor.rs`:
+  - Added `TargetConfig::SignalWithStart` handling in `execute_target()`
+  - Added `execute_signal_with_start()` method that uses `SignalLauncher` trait
+  - Added `extract_json_path_value()` helper for signal value extraction
+
+- [x] Add `SignalLauncher` trait to flovyn-core:
+  - Added `SignalWithStartRequest` and `SignalWithStartResult` types
+  - Added `SignalLauncher` trait with `signal_with_start()` method
+
+- [x] Add `SignalLauncherAdapter` to flovyn-server:
+  - Created adapter implementing `SignalLauncher` using `IdempotencyKeyRepository`
+  - Wired up in main.rs to PluginServices
+
+- [x] Update API DTOs:
+  - Added `SignalWithStartTargetRequest` and `SignalWithStartTargetResponse`
+  - Updated `TargetConfigRequest` and `TargetConfigResponse` enums
+  - Updated route handlers for SignalWithStart conversion
 
 ### 1.38 Eventhook Tests
 
-- [ ] Create eventhook integration test for signal_with_start target:
+- [ ] Create eventhook integration test for signal_with_start target (deferred):
   - Test webhook routes to SignalWithStart
   - Test workflow_id extraction from payload
   - Test signal value extraction
