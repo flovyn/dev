@@ -224,8 +224,11 @@ NOTE: Queue-based semantics (per signal name) to be added as needed
 - [x] **Bug fix**: Added `"SIGNAL_RECEIVED" => EventType::SignalReceived` to `parse_event_type()` in `workflow_worker.rs`
   - This was the root cause of signal tests failing - all SIGNAL_RECEIVED events were being parsed as WorkflowStarted
 
-- [ ] Create `sdk-rust/examples/patterns/src/signal_workflow.rs`:
+- [x] Create `sdk-rust/examples/patterns/src/signal_workflow.rs`:
   - Example conversation workflow using signals
+  - Added WaitForSignalWorkflow (simple signal wait), ConversationWorkflow (multi-turn chatbot), EventCollectorWorkflow (batch event collection)
+  - Updated main.rs to register signal workflows
+  - Updated examples README.md with signal documentation and curl examples
 
 ---
 
@@ -467,11 +470,146 @@ NOTE: Queue-based semantics (per signal name) to be added as needed
 
 ---
 
+## Phase 1.5: Fix Signal Name Filtering (Implementation Gap)
+
+**Problem**: The current implementation does not match the design document.
+
+**Design doc specifies** (lines 193-205):
+```rust
+pub async fn wait_for_signal<T>(&self, signal_name: &str) -> Result<T>;
+pub fn has_signal(&self, signal_name: &str) -> bool;
+pub async fn drain_signals<T>(&self, signal_name: &str) -> Result<Vec<T>>;
+```
+
+With per-name queues (lines 243-258):
+```rust
+signal_queues: HashMap<String, VecDeque<SignalEvent>>
+```
+
+**What was implemented**:
+```rust
+pub fn wait_for_signal_raw(&self) -> SignalFutureRaw;  // NO signal_name parameter
+pub fn has_signal(&self) -> bool;                       // NO signal_name parameter
+```
+
+With a single global FIFO queue (all signals regardless of name).
+
+**Why this matters**:
+- Cannot wait for a specific signal type (e.g., "approve" vs "reject")
+- Signals arrive out of order → wrong signal goes to wrong wait
+- Doesn't match Temporal's per-name signal channels
+
+### 1.50 SDK-Rust: Add Per-Name Signal Queues
+
+- [x] Update `sdk-rust/worker-core/src/workflow/replay_engine.rs`:
+  - Changed `signal_events: Vec<ReplayEvent>` to `signal_queues: RwLock<HashMap<String, VecDeque<ReplayEvent>>>`
+  - Added `pop_signal(signal_name: &str)` method
+  - Added `has_signal(signal_name: &str)` method
+  - Added `pending_signal_count_for_name(signal_name: &str)` method
+  - Added `drain_signals(signal_name: &str)` method
+  - Added `has_any_pending_signal()` and `total_pending_signal_count()` for total counts
+
+- [x] Update `sdk-rust/worker-sdk/src/workflow/context.rs` (trait):
+  - Changed `wait_for_signal_raw(&self)` to `wait_for_signal_raw(&self, signal_name: &str)`
+  - Changed `has_signal(&self)` to `has_signal(&self, signal_name: &str)`
+  - Changed `pending_signal_count(&self)` to `pending_signal_count(&self, signal_name: &str)`
+  - Changed `drain_signals_raw(&self)` to `drain_signals_raw(&self, signal_name: &str) -> Vec<Value>`
+
+- [x] Update `sdk-rust/worker-sdk/src/workflow/context_impl.rs`:
+  - Implemented name-based signal filtering using replay_engine.pop_signal()
+
+- [x] Update `sdk-rust/worker-sdk/src/workflow/future.rs`:
+  - Added `new_waiting_for_signal()` constructor
+  - Signal name passed for debugging/logging purposes
+
+- [x] Update `sdk-rust/worker-sdk/src/testing/mock_workflow_context.rs`:
+  - Changed `signal_queue` to `signal_queues: HashMap<String, VecDeque<Value>>`
+  - Updated mock methods to use signal names
+
+- [x] Update `sdk-rust/examples/patterns/src/signal_workflow.rs`:
+  - Updated all workflows to use signal names
+  - ConversationWorkflow uses "message" signal name
+  - EventCollectorWorkflow uses "event" signal name
+
+- [x] Update `sdk-rust/worker-sdk/tests/e2e/fixtures/workflows.rs`:
+  - Updated test workflows to use signal names
+
+### 1.51 SDK-Rust FFI: Update Bindings
+
+- [x] Update `sdk-rust/worker-ffi/src/context.rs`:
+  - Changed `wait_for_signal()` to take `signal_name: String` parameter
+  - Changed `has_signal()` to take `signal_name: String` parameter
+  - Changed `pending_signal_count()` to take `signal_name: String` parameter
+  - Changed `drain_signals()` to take `signal_name: String` parameter
+
+- [x] Update `sdk-rust/worker-napi/src/context.rs`:
+  - Same changes as FFI
+
+### 1.52 SDK-Python: Update Context
+
+- [x] Update `flovyn/context.py`:
+  - `wait_for_signal(name: str)` - changed from optional to required signal_name parameter
+  - `has_signal(name: str)` - add required signal_name parameter
+  - `pending_signal_count(name: str)` - add required signal_name parameter
+  - `drain_signals(name: str)` - add required signal_name parameter
+
+- [x] Update `flovyn/testing/mocks.py`:
+  - Update mock to use per-name queues (`_signal_queues: dict[str, list[Any]]`)
+
+- [x] Update E2E tests to use signal names
+
+### 1.53 SDK-Kotlin: Update Context
+
+- [x] Update `WorkflowContext.kt`:
+  - `waitForSignal(signalName: String)` - add required parameter
+  - `hasSignal(signalName: String)` - add required parameter
+  - `pendingSignalCount(signalName: String)` - add required parameter
+  - `drainSignals(signalName: String)` - add required parameter
+
+- [x] Update `WorkflowContextImpl.kt` implementation
+- [x] Update E2E test workflow fixtures
+
+### 1.54 SDK-TypeScript: Update Context
+
+- [x] Update `packages/sdk/src/types.ts`:
+  - `waitForSignal<T>(signalName: string): Promise<T>` - add required parameter
+  - `hasSignal(signalName: string): boolean` - add required parameter
+  - `pendingSignalCount(signalName: string): number` - add required parameter
+  - `drainSignals<T>(signalName: string): T[]` - add required parameter
+
+- [x] Update `packages/sdk/src/context/workflow-context.ts`:
+  - Implementation already uses NAPI bindings which have signal_name parameter
+
+- [x] Update `packages/sdk/src/testing/mock-workflow-context.ts`:
+  - Changed `_signalQueue` to `_signalQueues: Map<string, unknown[]>`
+  - All signal methods now take `signalName` parameter
+
+- [x] Update `tests/e2e/fixtures/workflows.ts`:
+  - `signalWorkflow` uses 'signal' signal name
+  - `multiSignalWorkflow` uses 'message' signal name
+  - `signalCheckWorkflow` uses 'data' signal name
+
+- [x] Update `tests/e2e/signal.test.ts`:
+  - All tests updated to use the well-known signal names
+
+### 1.55 Update Examples
+
+- [x] Update `sdk-rust/examples/patterns/src/signal_workflow.rs`:
+  - Use `wait_for_signal_raw("message")` instead of `wait_for_signal_raw()`
+  - ConversationWorkflow uses "message" signal name
+  - EventCollectorWorkflow uses "event" signal name
+
+---
+
 ## Phase 2: Verification
 
 ### 2.1 End-to-End Testing
 
-- [ ] Run full E2E test suite across all SDKs
+- [x] Run full E2E test suite across all SDKs
+  - [x] **Python SDK**: 4/4 signal tests passed (test_signal.py)
+  - [x] **TypeScript SDK**: 67/67 E2E tests passed (including 5 signal tests)
+  - [x] **Rust SDK**: 58/58 E2E tests passed (including 5 signal tests)
+  - [x] **Kotlin SDK**: 45/45 E2E tests passed (including 5 signal tests)
 - [ ] Test conversation workflow pattern (chatbot use case from design doc)
 - [ ] Test concurrent SignalWithStart calls (stress test atomicity)
 - [ ] Test signal replay after worker restart
@@ -482,6 +620,33 @@ NOTE: Queue-based semantics (per signal name) to be added as needed
 - [ ] Test signal workflow in Flovyn App UI
 - [ ] Verify SignalDetailsPanel displays correctly
 - [ ] Test eventhook webhook → SignalWithStart flow
+
+### 2.3 Code Simplification (Completed)
+
+- [x] Removed unnecessary base64 encoding from signal values
+  - Server now stores signal values as direct JSON (matching Promise pattern)
+  - SDK-Rust simplified to read JSON directly (no base64 decode)
+  - All SDKs updated (FFI, NAPI layers)
+- [x] Removed `FLOVYN_SERVER_IMAGE` environment variable from all test harnesses
+  - Test harnesses now use hardcoded default image
+  - CI workflows simplified
+  - Documentation updated
+
+### 2.4 Linting and Code Quality (Completed)
+
+- [x] Fixed Kotlin ktlint errors in `SignalE2ETest.kt`:
+  - Removed 7 inline comments in value_argument_list (ktlint requires comments on separate lines)
+- [x] Fixed Rust clippy warnings:
+  - **flovyn-server**: Combined duplicate `if` branches in `plugin_adapters.rs`
+  - **flovyn-server**: Changed `expect(&format!(...))` to `unwrap_or_else(|_| panic!(...))` in signal_tests.rs
+  - **flovyn-server**: Added `#[allow(dead_code)]` to `count_signals_for_workflow` (reserved for future use)
+  - **sdk-rust**: Changed `len() >= 1` to `!is_empty()` in signal_tests.rs
+  - **sdk-rust**: Added `#[allow(dead_code)]` to `SignalFuture::new_with_cell` (follows pattern, may be useful later)
+- [x] All SDK linting passes:
+  - Python: ruff check ✓
+  - TypeScript: eslint ✓
+  - Kotlin: ktlint ✓
+  - Rust (server + SDK): clippy ✓
 
 ---
 

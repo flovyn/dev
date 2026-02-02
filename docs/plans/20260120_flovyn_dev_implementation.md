@@ -24,11 +24,6 @@ Examples:
 - `rg.fr-par.scw.cloud/flovyn/flovyn-app:webhook-retry`
 - `rg.fr-par.scw.cloud/flovyn/rust-examples-worker:schedules`
 
-**Environment variables for E2E tests:**
-- `FLOVYN_SERVER_IMAGE` - Full image name with tag
-- `FLOVYN_APP_IMAGE` - Full image name with tag
-- `FLOVYN_WORKER_IMAGE` - Full image name with tag
-
 ---
 
 ## Milestone 0: Migrate Existing Documentation

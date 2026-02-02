@@ -287,7 +287,6 @@ Before starting:
   - Health check with 30-second timeout
   - Container cleanup on exit
   - Support `FLOVYN_TEST_KEEP_CONTAINERS` env var
-  - Support `FLOVYN_SERVER_IMAGE` env var
 - [x] Create `sdk-rust/tests/e2e/conftest.py`:
   - `@pytest.fixture(scope="session")` for global harness
   - `@pytest.fixture` for per-test environment
@@ -527,7 +526,6 @@ python -m build
 
 | Variable | Description |
 |----------|-------------|
-| `FLOVYN_SERVER_IMAGE` | Custom Flovyn server image for E2E tests |
 | `FLOVYN_TEST_KEEP_CONTAINERS` | Keep containers after test run (debugging) |
 | `FLOVYN_E2E_VERBOSE` | Enable verbose logging in E2E tests |
 | `FLOVYN_E2E_ENABLED` | Enable E2E tests (requires Docker) |

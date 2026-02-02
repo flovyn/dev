@@ -99,15 +99,13 @@ const LABELS = {
 
 ### Image Naming Convention
 
-Following the convention from `sdk-rust/worker-sdk/tests/e2e/harness.rs`:
+| Image | Registry Path |
+|-------|--------------|
+| Server | `rg.fr-par.scw.cloud/flovyn/flovyn-server:latest` |
+| Worker (patterns) | `rg.fr-par.scw.cloud/flovyn/patterns-worker:latest` |
+| Worker (hello) | `rg.fr-par.scw.cloud/flovyn/hello-worker:latest` |
 
-| Image | Registry Path | Env Override |
-|-------|--------------|--------------|
-| Server | `rg.fr-par.scw.cloud/flovyn/flovyn-server:latest` | `FLOVYN_SERVER_IMAGE` |
-| Worker (patterns) | `rg.fr-par.scw.cloud/flovyn/patterns-worker:latest` | `FLOVYN_WORKER_IMAGE` |
-| Worker (hello) | `rg.fr-par.scw.cloud/flovyn/hello-worker:latest` | - |
-
-For local development and E2E tests, images can be built locally with the same names or overridden via environment variables.
+For local development and E2E tests, images should be built/tagged locally with these same names.
 
 ### flovyn-server Image
 
@@ -331,21 +329,13 @@ The test harness will use `GenericContainer` with images following the naming co
 ```typescript
 // Default image names (can be overridden via env vars)
 const DEFAULT_SERVER_IMAGE = 'rg.fr-par.scw.cloud/flovyn/flovyn-server:latest';
-const DEFAULT_WORKER_IMAGE = 'rg.fr-par.scw.cloud/flovyn/patterns-worker:latest';
-
-function getServerImage(): string {
-  return process.env.FLOVYN_SERVER_IMAGE || DEFAULT_SERVER_IMAGE;
-}
-
-function getWorkerImage(): string {
-  return process.env.FLOVYN_WORKER_IMAGE || DEFAULT_WORKER_IMAGE;
-}
+const SERVER_IMAGE = 'rg.fr-par.scw.cloud/flovyn/flovyn-server:latest';
+const WORKER_IMAGE = 'rg.fr-par.scw.cloud/flovyn/patterns-worker:latest';
 
 async function startFlovynServer(sessionId: string, config: ServerConfig): Promise<StartedTestContainer> {
-  const imageName = getServerImage();
-  console.log(`[HARNESS] Starting flovyn-server from image: ${imageName}`);
+  console.log(`[HARNESS] Starting flovyn-server from image: ${SERVER_IMAGE}`);
 
-  return new GenericContainer(imageName)
+  return new GenericContainer(SERVER_IMAGE)
     .withExtraHost('host.docker.internal', 'host-gateway')  // Required for Linux
     .withEnvironment({
       DATABASE_URL: `postgres://flovyn:flovyn@host.docker.internal:${config.dbPort}/flovyn`,
@@ -1440,7 +1430,7 @@ jobs:
 
 3. **Browser coverage**: Focus on Chromium only. Cross-browser testing can be added later if needed.
 
-4. **flovyn-server deployment**: Use Docker images from the registry (`rg.fr-par.scw.cloud/flovyn/flovyn-server:latest`). Images can be overridden via `FLOVYN_SERVER_IMAGE` env var for local development.
+4. **flovyn-server deployment**: Use Docker images from the registry (`rg.fr-par.scw.cloud/flovyn/flovyn-server:latest`). For local development, build and tag images with the same names.
 
 5. **Sample worker**: Use the `patterns` example from sdk-rust as it provides comprehensive workflow patterns for testing. Build as Docker image (`rg.fr-par.scw.cloud/flovyn/patterns-worker:latest`).
 
