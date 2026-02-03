@@ -642,11 +642,22 @@ With a single global FIFO queue (all signals regardless of name).
   - **flovyn-server**: Added `#[allow(dead_code)]` to `count_signals_for_workflow` (reserved for future use)
   - **sdk-rust**: Changed `len() >= 1` to `!is_empty()` in signal_tests.rs
   - **sdk-rust**: Added `#[allow(dead_code)]` to `SignalFuture::new_with_cell` (follows pattern, may be useful later)
-- [x] All SDK linting passes:
-  - Python: ruff check ✓
-  - TypeScript: eslint ✓
-  - Kotlin: ktlint ✓
-  - Rust (server + SDK): clippy ✓
+- [x] Fixed Rust formatting (`cargo fmt`):
+  - **flovyn-server**: Multiple files reformatted (plugin_adapters.rs, openapi.rs, event_repository.rs, idempotency_key_repository.rs, signal_tests.rs)
+  - **sdk-rust**: Multiple files reformatted (workflow_dispatch.rs, replay_engine.rs, context.rs in worker-ffi and worker-napi, signal_tests.rs, signal_workflow.rs, main.rs)
+- [x] Fixed Python formatting (`ruff format`):
+  - `flovyn/context.py` and `flovyn/types.py` reformatted
+- [x] Fixed TypeScript formatting (`prettier`):
+  - `packages/sdk/src/testing/test-harness.ts` reformatted
+- [x] Updated NAPI TypeScript type bindings:
+  - Added `signalName: string` parameter to `waitForSignal`, `hasSignal`, `pendingSignalCount`, `drainSignals` in `packages/native/src/index.ts`
+  - TypeScript build was failing without this update
+- [x] All repos verified (fmt + lint + build):
+  - flovyn-server: cargo fmt ✓, clippy ✓, cargo check ✓
+  - sdk-rust: cargo fmt ✓, clippy ✓, cargo check ✓
+  - sdk-python: ruff format ✓, ruff check ✓
+  - sdk-typescript: prettier ✓, eslint ✓, tsc build ✓
+  - sdk-kotlin: ktlint ✓, gradle check ✓
 
 ---
 
