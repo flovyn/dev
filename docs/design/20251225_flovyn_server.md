@@ -921,9 +921,6 @@ cargo test --test e2e -- --nocapture
 
 # Run with debug logging
 RUST_LOG=debug cargo test --test e2e -- --nocapture
-
-# Run with specific server image
-FLOVYN_SERVER_IMAGE=flovyn-server-rust cargo test --test e2e -- --nocapture
 ```
 
 ---

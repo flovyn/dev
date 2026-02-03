@@ -205,8 +205,6 @@ Flovyn Forge is a separate repository/crate. For initial development, it can liv
   - Run unit tests
   - Run integration tests with Docker
 
-**Blocker**: The `rg.fr-par.scw.cloud/flovyn/flovyn-server:latest` Docker image needs to be rebuilt with the task-executions endpoint. Run tests with `FLOVYN_SERVER_IMAGE=<local-image>` once available.
-
 **Usable after Phase 8**: Automated test coverage for all features.
 
 ---
