@@ -40,7 +40,7 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
           resolve_ref() {
-            if git ls-remote --exit-code --heads "https://github.com/flovyn/$1" "$BRANCH" 2>/dev/null; then
+            if git ls-remote --exit-code --heads "https://github.com/flovyn/$1" "$BRANCH" >/dev/null 2>&1; then
               echo "$BRANCH"
             else
               echo "main"
