@@ -127,7 +127,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: napi-linux-x64-gnu
-          path: sdk-rust/worker-napi/flovyn-worker-napi.linux-x64-gnu.node
+          path: sdk-rust/worker-napi/flovyn-native.linux-x64-gnu.node
 
       - name: Save Docker image
         run: docker save rg.fr-par.scw.cloud/flovyn/flovyn-server:latest | gzip > server-image.tar.gz
@@ -189,9 +189,10 @@ jobs:
         run: |
           cd flovyn/_native
           mkdir -p linux-x86_64
-          mv libflovyn_worker_ffi.so linux-x86_64/
+          mv target/release/libflovyn_worker_ffi.so linux-x86_64/
           ln -sf linux-x86_64/libflovyn_worker_ffi.so libflovyn_worker_ffi.so
-          # flovyn_worker_ffi.py is already in the right place from artifact download
+          mv bindings/python/flovyn_worker_ffi.py .
+          rm -rf target bindings
 
       - name: Download Docker image
         uses: actions/download-artifact@v4
@@ -235,7 +236,7 @@ jobs:
       - name: Setup FFI files
         run: |
           mkdir -p worker-native/src/main/resources/natives/linux-x86_64
-          cp tmp-ffi/libflovyn_worker_ffi.so worker-native/src/main/resources/natives/linux-x86_64/
+          cp tmp-ffi/target/release/libflovyn_worker_ffi.so worker-native/src/main/resources/natives/linux-x86_64/
 
       - name: Download Docker image
         uses: actions/download-artifact@v4
@@ -329,7 +330,7 @@ jobs:
         run: |
           cat >> Cargo.toml << 'PATCH'
 
-          [patch.crates-io]
+          [patch."https://github.com/flovyn/sdk-rust"]
           flovyn-worker-sdk = { path = "_deps/sdk-rust/worker-sdk" }
           flovyn-worker-core = { path = "_deps/sdk-rust/worker-core" }
           PATCH
