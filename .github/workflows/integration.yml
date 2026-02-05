@@ -1,0 +1,376 @@
+name: Workspace Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to test across repos'
+        required: true
+        default: 'main'
+  repository_dispatch:
+    types: [trigger-integration]
+
+# DEDUPLICATION: Only one run per branch at a time
+# If sdk-python and sdk-typescript both push to feature/foo,
+# the second trigger cancels the first (which is still building)
+# and runs with the latest code from all repos
+concurrency:
+  group: workspace-${{ github.event.inputs.branch || github.event.client_payload.branch || 'main' }}
+  cancel-in-progress: true
+
+env:
+  RUST_VERSION: "1.92.0"
+
+jobs:
+  resolve-refs:
+    name: Resolve Branch Refs
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.resolve.outputs.branch }}
+      server_ref: ${{ steps.resolve.outputs.server_ref }}
+      sdk_rust_ref: ${{ steps.resolve.outputs.sdk_rust_ref }}
+      sdk_python_ref: ${{ steps.resolve.outputs.sdk_python_ref }}
+      sdk_kotlin_ref: ${{ steps.resolve.outputs.sdk_kotlin_ref }}
+      sdk_typescript_ref: ${{ steps.resolve.outputs.sdk_typescript_ref }}
+    steps:
+      - name: Resolve refs
+        id: resolve
+        run: |
+          BRANCH="${{ github.event.inputs.branch || github.event.client_payload.branch || 'main' }}"
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+
+          resolve_ref() {
+            if git ls-remote --exit-code --heads "https://github.com/flovyn/$1" "$BRANCH" 2>/dev/null; then
+              echo "$BRANCH"
+            else
+              echo "main"
+            fi
+          }
+
+          echo "server_ref=$(resolve_ref flovyn-server)" >> $GITHUB_OUTPUT
+          echo "sdk_rust_ref=$(resolve_ref sdk-rust)" >> $GITHUB_OUTPUT
+          echo "sdk_python_ref=$(resolve_ref sdk-python)" >> $GITHUB_OUTPUT
+          echo "sdk_kotlin_ref=$(resolve_ref sdk-kotlin)" >> $GITHUB_OUTPUT
+          echo "sdk_typescript_ref=$(resolve_ref sdk-typescript)" >> $GITHUB_OUTPUT
+
+  build-artifacts:
+    name: Build Artifacts
+    runs-on: ubuntu-latest
+    needs: resolve-refs
+    steps:
+      - name: Checkout sdk-rust
+        uses: actions/checkout@v4
+        with:
+          repository: flovyn/sdk-rust
+          ref: ${{ needs.resolve-refs.outputs.sdk_rust_ref }}
+          path: sdk-rust
+
+      - name: Checkout flovyn-server
+        uses: actions/checkout@v4
+        with:
+          repository: flovyn/flovyn-server
+          ref: ${{ needs.resolve-refs.outputs.server_ref }}
+          path: flovyn-server
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Build FFI library (for Python/Kotlin)
+        run: |
+          cd sdk-rust
+          cargo build --release -p flovyn-worker-ffi
+
+      - name: Generate Python bindings
+        run: |
+          cd sdk-rust
+          mkdir -p bindings/python
+          cargo run -p flovyn-worker-ffi --bin uniffi-bindgen -- \
+            generate --library target/release/libflovyn_worker_ffi.so \
+            --language python \
+            --out-dir bindings/python
+
+      - name: Build NAPI library (for TypeScript)
+        run: |
+          cd sdk-rust/worker-napi
+          pnpm install
+          pnpm build --release
+
+      - name: Build flovyn-server Docker image
+        run: |
+          cd flovyn-server
+          docker build -t rg.fr-par.scw.cloud/flovyn/flovyn-server:latest .
+
+      - name: Upload FFI artifact (Python/Kotlin)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffi-linux-x86_64
+          path: |
+            sdk-rust/target/release/libflovyn_worker_ffi.so
+            sdk-rust/bindings/python/flovyn_worker_ffi.py
+
+      - name: Upload NAPI artifact (TypeScript)
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-linux-x64-gnu
+          path: sdk-rust/worker-napi/flovyn-worker-napi.linux-x64-gnu.node
+
+      - name: Save Docker image
+        run: docker save rg.fr-par.scw.cloud/flovyn/flovyn-server:latest | gzip > server-image.tar.gz
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-docker-image
+          path: server-image.tar.gz
+
+  e2e-sdk-rust:
+    name: E2E Tests (sdk-rust)
+    runs-on: ubuntu-latest
+    needs: [resolve-refs, build-artifacts]
+    steps:
+      - name: Checkout sdk-rust
+        uses: actions/checkout@v4
+        with:
+          repository: flovyn/sdk-rust
+          ref: ${{ needs.resolve-refs.outputs.sdk_rust_ref }}
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: server-docker-image
+
+      - name: Load Docker image
+        run: gunzip -c server-image.tar.gz | docker load
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Run E2E tests
+        run: cargo test --test e2e -- --ignored --nocapture
+
+  e2e-sdk-python:
+    name: E2E Tests (sdk-python)
+    runs-on: ubuntu-latest
+    needs: [resolve-refs, build-artifacts]
+    steps:
+      - name: Checkout sdk-python
+        uses: actions/checkout@v4
+        with:
+          repository: flovyn/sdk-python
+          ref: ${{ needs.resolve-refs.outputs.sdk_python_ref }}
+
+      - name: Download FFI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ffi-linux-x86_64
+          path: flovyn/_native
+
+      - name: Setup FFI files
+        run: |
+          cd flovyn/_native
+          mkdir -p linux-x86_64
+          mv libflovyn_worker_ffi.so linux-x86_64/
+          ln -sf linux-x86_64/libflovyn_worker_ffi.so libflovyn_worker_ffi.so
+          # flovyn_worker_ffi.py is already in the right place from artifact download
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: server-docker-image
+
+      - name: Load Docker image
+        run: gunzip -c server-image.tar.gz | docker load
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run E2E tests
+        run: uv run pytest tests/e2e -v --tb=short -m e2e
+
+  e2e-sdk-kotlin:
+    name: E2E Tests (sdk-kotlin)
+    runs-on: ubuntu-latest
+    needs: [resolve-refs, build-artifacts]
+    steps:
+      - name: Checkout sdk-kotlin
+        uses: actions/checkout@v4
+        with:
+          repository: flovyn/sdk-kotlin
+          ref: ${{ needs.resolve-refs.outputs.sdk_kotlin_ref }}
+
+      - name: Download FFI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ffi-linux-x86_64
+          path: tmp-ffi
+
+      - name: Setup FFI files
+        run: |
+          mkdir -p worker-native/src/main/resources/natives/linux-x86_64
+          cp tmp-ffi/libflovyn_worker_ffi.so worker-native/src/main/resources/natives/linux-x86_64/
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: server-docker-image
+
+      - name: Load Docker image
+        run: gunzip -c server-image.tar.gz | docker load
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Run E2E tests
+        run: ./gradlew :worker-sdk-jackson:e2eTest
+
+  e2e-sdk-typescript:
+    name: E2E Tests (sdk-typescript)
+    runs-on: ubuntu-latest
+    needs: [resolve-refs, build-artifacts]
+    steps:
+      - name: Checkout sdk-typescript
+        uses: actions/checkout@v4
+        with:
+          repository: flovyn/sdk-typescript
+          ref: ${{ needs.resolve-refs.outputs.sdk_typescript_ref }}
+
+      - name: Download NAPI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: napi-linux-x64-gnu
+          path: packages/native
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: server-docker-image
+
+      - name: Load Docker image
+        run: gunzip -c server-image.tar.gz | docker load
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Run E2E tests
+        run: pnpm test:e2e
+
+  integration-flovyn-server:
+    name: Integration Tests (flovyn-server)
+    runs-on: ubuntu-latest
+    needs: [resolve-refs]
+    steps:
+      - name: Checkout flovyn-server
+        uses: actions/checkout@v4
+        with:
+          repository: flovyn/flovyn-server
+          ref: ${{ needs.resolve-refs.outputs.server_ref }}
+
+      - name: Checkout sdk-rust
+        uses: actions/checkout@v4
+        with:
+          repository: flovyn/sdk-rust
+          ref: ${{ needs.resolve-refs.outputs.sdk_rust_ref }}
+          path: _deps/sdk-rust
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Patch Cargo.toml for local sdk-rust
+        run: |
+          cat >> Cargo.toml << 'PATCH'
+
+          [patch.crates-io]
+          flovyn-worker-sdk = { path = "_deps/sdk-rust/worker-sdk" }
+          flovyn-worker-core = { path = "_deps/sdk-rust/worker-core" }
+          PATCH
+
+      - name: Run integration tests
+        run: cargo test --test integration_tests
+
+  post-status:
+    name: Post Status to Repos
+    runs-on: ubuntu-latest
+    needs: [resolve-refs, e2e-sdk-rust, e2e-sdk-python, e2e-sdk-kotlin, e2e-sdk-typescript, integration-flovyn-server]
+    if: always()
+    steps:
+      - name: Determine overall status
+        id: status
+        run: |
+          if [ "${{ needs.e2e-sdk-rust.result }}" = "success" ] && \
+             [ "${{ needs.e2e-sdk-python.result }}" = "success" ] && \
+             [ "${{ needs.e2e-sdk-kotlin.result }}" = "success" ] && \
+             [ "${{ needs.e2e-sdk-typescript.result }}" = "success" ] && \
+             [ "${{ needs.integration-flovyn-server.result }}" = "success" ]; then
+            echo "state=success" >> $GITHUB_OUTPUT
+          else
+            echo "state=failure" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post commit status to repos
+        env:
+          GH_TOKEN: ${{ secrets.WORKSPACE_PAT }}
+          BRANCH: ${{ needs.resolve-refs.outputs.branch }}
+        run: |
+          STATE="${{ steps.status.outputs.state }}"
+          TARGET_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          for repo in flovyn-server sdk-rust sdk-python sdk-kotlin sdk-typescript; do
+            if git ls-remote --exit-code --heads "https://github.com/flovyn/$repo" "$BRANCH" 2>/dev/null; then
+              SHA=$(git ls-remote "https://github.com/flovyn/$repo" "refs/heads/$BRANCH" | cut -f1)
+              gh api "repos/flovyn/$repo/statuses/$SHA" \
+                -f state="$STATE" \
+                -f context="workspace/integration" \
+                -f description="Workspace integration tests" \
+                -f target_url="$TARGET_URL" || true
+            fi
+          done
