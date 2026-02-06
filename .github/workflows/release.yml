@@ -63,7 +63,7 @@ jobs:
           echo "Waiting for sdk-rust release workflow (tag: $TAG)..."
 
           # Wait for the workflow run to appear (triggered by tag push)
-          for i in $(seq 1 30); do
+          for i in $(seq 1 72); do
             RUN_ID=$(gh run list -R flovyn/sdk-rust -w Release \
               --json databaseId,headBranch,status \
               --jq ".[] | select(.headBranch == \"$TAG\") | .databaseId" \
@@ -72,12 +72,12 @@ jobs:
               echo "Found workflow run: $RUN_ID"
               break
             fi
-            echo "Waiting for workflow run to appear... ($i/30)"
+            echo "Waiting for workflow run to appear... ($i/72)"
             sleep 10
           done
 
           if [ -z "$RUN_ID" ]; then
-            echo "Error: sdk-rust release workflow not found after 5 minutes"
+            echo "Error: sdk-rust release workflow not found after 12 minutes"
             exit 1
           fi
 
