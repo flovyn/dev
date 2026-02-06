@@ -48,10 +48,56 @@ jobs:
         run: |
           echo "DRY RUN: Would create and push tag v${{ inputs.version }}"
 
+  wait-sdk-rust-release:
+    name: Wait for sdk-rust Release
+    runs-on: ubuntu-latest
+    needs: release-sdk-rust
+    if: ${{ !inputs.dry_run }}
+    timeout-minutes: 30
+    steps:
+      - name: Wait for sdk-rust release workflow to complete
+        env:
+          GH_TOKEN: ${{ secrets.WORKSPACE_PAT }}
+        run: |
+          TAG="v${{ inputs.version }}"
+          echo "Waiting for sdk-rust release workflow (tag: $TAG)..."
+
+          # Wait for the workflow run to appear (triggered by tag push)
+          for i in $(seq 1 30); do
+            RUN_ID=$(gh run list -R flovyn/sdk-rust -w Release \
+              --json databaseId,headBranch,status \
+              --jq ".[] | select(.headBranch == \"$TAG\") | .databaseId" \
+              | head -1)
+            if [ -n "$RUN_ID" ]; then
+              echo "Found workflow run: $RUN_ID"
+              break
+            fi
+            echo "Waiting for workflow run to appear... ($i/30)"
+            sleep 10
+          done
+
+          if [ -z "$RUN_ID" ]; then
+            echo "Error: sdk-rust release workflow not found after 5 minutes"
+            exit 1
+          fi
+
+          # Wait for it to complete
+          echo "Waiting for run $RUN_ID to complete..."
+          gh run watch "$RUN_ID" -R flovyn/sdk-rust --exit-status
+
+      - name: Verify GitHub Release exists
+        env:
+          GH_TOKEN: ${{ secrets.WORKSPACE_PAT }}
+        run: |
+          TAG="v${{ inputs.version }}"
+          gh release view "$TAG" -R flovyn/sdk-rust --json tagName
+          echo "sdk-rust release $TAG is available"
+
   release-language-sdks:
     name: Release Language SDKs
     runs-on: ubuntu-latest
-    needs: release-sdk-rust
+    needs: [release-sdk-rust, wait-sdk-rust-release]
+    if: ${{ always() && needs.release-sdk-rust.result == 'success' && (inputs.dry_run || needs.wait-sdk-rust-release.result == 'success') }}
     strategy:
       matrix:
         repo: [sdk-python, sdk-kotlin, sdk-typescript]
@@ -144,7 +190,7 @@ jobs:
   summary:
     name: Release Summary
     runs-on: ubuntu-latest
-    needs: [release-sdk-rust, release-language-sdks, release-server]
+    needs: [release-sdk-rust, wait-sdk-rust-release, release-language-sdks, release-server]
     if: always()
     steps:
       - name: Print release summary
