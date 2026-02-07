@@ -127,11 +127,26 @@ jobs:
         run: |
           TAG="v${{ inputs.version }}"
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists in ${{ matrix.repo }}, skipping"
+            echo "Tag $TAG already exists in ${{ matrix.repo }}, skipping tag creation"
           else
             git tag "$TAG"
             git push origin "$TAG"
             echo "Created tag $TAG"
+          fi
+
+      - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.WORKSPACE_PAT }}
+        run: |
+          TAG="v${{ inputs.version }}"
+          if gh release view "$TAG" -R "flovyn/${{ matrix.repo }}" --json tagName >/dev/null 2>&1; then
+            echo "Release $TAG already exists in ${{ matrix.repo }}, skipping"
+          else
+            gh release create "$TAG" -R "flovyn/${{ matrix.repo }}" \
+              --title "$TAG" \
+              --generate-notes
+            echo "Created release $TAG in ${{ matrix.repo }}"
           fi
 
       - name: Dry run - would update and tag
@@ -139,6 +154,7 @@ jobs:
         run: |
           echo "DRY RUN: Would update ${{ steps.vars.outputs.var_name }} to v${{ inputs.version }}"
           echo "DRY RUN: Would create and push tag v${{ inputs.version }}"
+          echo "DRY RUN: Would create GitHub Release v${{ inputs.version }}"
           if [ "${{ env.VERSION_UPDATED }}" = "true" ]; then
             echo "Changes that would be committed:"
             git diff HEAD~1 .github/workflows/ci.yml || git diff .github/workflows/ci.yml
@@ -160,17 +176,33 @@ jobs:
         run: |
           TAG="v${{ inputs.version }}"
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists in flovyn-server, skipping"
+            echo "Tag $TAG already exists in flovyn-server, skipping tag creation"
           else
             git tag "$TAG"
             git push origin "$TAG"
             echo "Created tag $TAG"
           fi
 
+      - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.WORKSPACE_PAT }}
+        run: |
+          TAG="v${{ inputs.version }}"
+          if gh release view "$TAG" -R flovyn/flovyn-server --json tagName >/dev/null 2>&1; then
+            echo "Release $TAG already exists in flovyn-server, skipping"
+          else
+            gh release create "$TAG" -R flovyn/flovyn-server \
+              --title "$TAG" \
+              --generate-notes
+            echo "Created release $TAG in flovyn-server"
+          fi
+
       - name: Dry run - would create tag
         if: ${{ inputs.dry_run }}
         run: |
           echo "DRY RUN: Would create and push tag v${{ inputs.version }}"
+          echo "DRY RUN: Would create GitHub Release v${{ inputs.version }}"
 
   summary:
     name: Release Summary
@@ -191,9 +223,9 @@ jobs:
           echo "4. flovyn-server: ${{ needs.release-server.result }}"
           echo ""
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "This was a DRY RUN - no tags were created"
+            echo "This was a DRY RUN - no releases were created"
           else
-            echo "Tags created (or already existed):"
+            echo "Releases created (or already existed):"
             echo "  - flovyn/sdk-rust: v${{ inputs.version }}"
             echo "  - flovyn/sdk-python: v${{ inputs.version }}"
             echo "  - flovyn/sdk-kotlin: v${{ inputs.version }}"
