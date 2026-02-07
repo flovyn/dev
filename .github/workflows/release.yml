@@ -104,16 +104,20 @@ jobs:
             echo "var_name=FFI_VERSION" >> $GITHUB_OUTPUT
           fi
 
-      - name: Update FFI/NAPI version in CI workflow
+      - name: Update FFI/NAPI version in workflows
         run: |
           VAR_NAME="${{ steps.vars.outputs.var_name }}"
-          sed -i "s/${VAR_NAME}: v.*/${VAR_NAME}: v${{ inputs.version }}/" .github/workflows/ci.yml
-          if git diff --quiet .github/workflows/ci.yml; then
+          for f in .github/workflows/ci.yml .github/workflows/release.yml; do
+            if [ -f "$f" ]; then
+              sed -i "s/${VAR_NAME}: v.*/${VAR_NAME}: v${{ inputs.version }}/" "$f"
+            fi
+          done
+          if git diff --quiet; then
             echo "No changes needed - version already set"
           else
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
-            git add .github/workflows/ci.yml
+            git add .github/workflows/
             git commit -m "chore: update FFI/NAPI version to v${{ inputs.version }}"
             echo "VERSION_UPDATED=true" >> $GITHUB_ENV
           fi
@@ -134,30 +138,15 @@ jobs:
             echo "Created tag $TAG"
           fi
 
-      - name: Create GitHub Release
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.WORKSPACE_PAT }}
-        run: |
-          TAG="v${{ inputs.version }}"
-          if gh release view "$TAG" -R "flovyn/${{ matrix.repo }}" --json tagName >/dev/null 2>&1; then
-            echo "Release $TAG already exists in ${{ matrix.repo }}, skipping"
-          else
-            gh release create "$TAG" -R "flovyn/${{ matrix.repo }}" \
-              --title "$TAG" \
-              --generate-notes
-            echo "Created release $TAG in ${{ matrix.repo }}"
-          fi
-
       - name: Dry run - would update and tag
         if: ${{ inputs.dry_run }}
         run: |
           echo "DRY RUN: Would update ${{ steps.vars.outputs.var_name }} to v${{ inputs.version }}"
           echo "DRY RUN: Would create and push tag v${{ inputs.version }}"
-          echo "DRY RUN: Would create GitHub Release v${{ inputs.version }}"
+          echo "DRY RUN: Tag push triggers per-repo release workflow"
           if [ "${{ env.VERSION_UPDATED }}" = "true" ]; then
             echo "Changes that would be committed:"
-            git diff HEAD~1 .github/workflows/ci.yml || git diff .github/workflows/ci.yml
+            git diff HEAD~1 .github/workflows/ || git diff .github/workflows/
           fi
 
   release-server:
@@ -183,26 +172,11 @@ jobs:
             echo "Created tag $TAG"
           fi
 
-      - name: Create GitHub Release
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.WORKSPACE_PAT }}
-        run: |
-          TAG="v${{ inputs.version }}"
-          if gh release view "$TAG" -R flovyn/flovyn-server --json tagName >/dev/null 2>&1; then
-            echo "Release $TAG already exists in flovyn-server, skipping"
-          else
-            gh release create "$TAG" -R flovyn/flovyn-server \
-              --title "$TAG" \
-              --generate-notes
-            echo "Created release $TAG in flovyn-server"
-          fi
-
       - name: Dry run - would create tag
         if: ${{ inputs.dry_run }}
         run: |
           echo "DRY RUN: Would create and push tag v${{ inputs.version }}"
-          echo "DRY RUN: Would create GitHub Release v${{ inputs.version }}"
+          echo "DRY RUN: Tag push triggers per-repo release workflow"
 
   summary:
     name: Release Summary
@@ -223,9 +197,9 @@ jobs:
           echo "4. flovyn-server: ${{ needs.release-server.result }}"
           echo ""
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "This was a DRY RUN - no releases were created"
+            echo "This was a DRY RUN - no tags were created"
           else
-            echo "Releases created (or already existed):"
+            echo "Tags created (or already existed) - per-repo release workflows handle GitHub Releases:"
             echo "  - flovyn/sdk-rust: v${{ inputs.version }}"
             echo "  - flovyn/sdk-python: v${{ inputs.version }}"
             echo "  - flovyn/sdk-kotlin: v${{ inputs.version }}"
