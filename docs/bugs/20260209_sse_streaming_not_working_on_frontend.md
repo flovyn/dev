@@ -140,6 +140,38 @@ Changed WORKFLOW_SUSPENDED handler from unconditional turn-complete to:
 - `SUSPEND_TYPE_SIGNAL` → turn complete (workflow waiting for user input)
 - `SUSPEND_TYPE_TASK` / other → continue processing (internal suspension)
 
+### Bug 5: `window.history.replaceState` Triggers Next.js Route Navigation (Critical)
+
+**Date**: 2026-02-09
+
+**Mechanism**: In `unified-run-view.tsx`, the `createSession` callback calls `window.history.replaceState(null, '', '/org/{slug}/ai/runs/{workflowId}')` to update the URL after workflow creation. Next.js 16.1.1 monkey-patches `history.replaceState` in `app-router.js` (lines 240-266) to intercept URL changes. When the URL changes from `/runs/new` to `/runs/{id}`, Next.js dispatches an `ACTION_RESTORE` router action via `startTransition()`, causing:
+
+1. `new/page.tsx` unmounts → `UnifiedRunView` unmounts → active streaming adapter destroyed
+2. `[runId]/page.tsx` mounts → API calls start loading → `UnifiedRunView` mounts with NEW adapter
+3. New adapter has fresh state (`sid=null, turnCount=0, runActive=false`)
+4. Pattern repeats: adapter created → run → session → replaceState → adapter destroyed → repeat
+
+**Evidence**: Console logs show 4+ "adapter created" messages per workflow run, each with fresh state:
+```
+[8]  20:00:11 [flovyn-adapter] adapter created
+[9]  20:00:11 [flovyn-adapter] run() turn=1 followUp=false sid=null active=false
+[10] 20:00:12 [flovyn-adapter] session created sid=4f39925e-...
+[11] 20:00:12 [flovyn-adapter] adapter created     ← SECOND adapter (replaceState triggered)
+[12] 20:00:12 [flovyn-adapter] run() turn=1 followUp=false sid=null active=false
+[15] 20:00:27 [flovyn-adapter] adapter created     ← THIRD adapter
+```
+
+No "event" or "stream ended" logs ever appear — adapters are destroyed before SSE events arrive.
+
+**Fix**: Restructure the flow:
+1. `new/page.tsx` triggers the workflow directly (not via adapter)
+2. Shows loading state while creating
+3. Once `workflowExecutionId` is obtained, `router.replace()` to `[runId]/page.tsx`
+4. `[runId]/page.tsx` creates adapter with `existingSessionId` and connects to SSE
+5. JetStream replays all events from the beginning — no events lost
+
+This eliminates `replaceState` entirely. Workflow creation happens BEFORE navigation.
+
 ## Verification
 
 - [ ] Restart server with fixed binary
@@ -148,3 +180,5 @@ Changed WORKFLOW_SUSPENDED handler from unconditional turn-complete to:
 - [ ] WORKFLOW_SUSPENDED with `suspendType: "SUSPEND_TYPE_SIGNAL"` ends turn correctly
 - [ ] Follow-up turn streaming works (WORKFLOW_RESUMED → tokens → signal suspension)
 - [ ] Historical messages still load correctly on run page refresh
+- [ ] No `replaceState` — `new/page.tsx` creates workflow then redirects via `router.replace()`
+- [ ] `[runId]/page.tsx` auto-streams running workflows via JetStream replay
