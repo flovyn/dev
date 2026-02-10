@@ -1,31 +1,90 @@
-# Research: Conversation Event Flow
+# Reference: Agent UI Data Architecture
 
-**Date**: 2026-02-09
-**Status**: Research
-**Related**: [AI Conversation Durability](20260128_ai_conversation_durability.md), [Execution Patterns](20260128_execution_patterns_multi_message.md)
+**Date**: 2026-02-09 (updated 2026-02-10)
+**Status**: Reference
+**Related**: [Agent UI State Redesign](../design/20260210_agent-ui-state-redesign.md)
 
 ---
 
 ## Summary
 
-This document maps how conversation data flows from the agent workflow through the server to the frontend. There are two independent mechanisms for displaying conversations: **live streaming** (ephemeral, real-time) and **historical state reconstruction** (durable, on-demand). They use different data paths and have different characteristics.
+The agent UI derives its state from two sources: **workflow execution status** (durable, server-managed) and **SSE stream events** (ephemeral, real-time). Workflow status is the source of truth for what the UI should display. SSE events provide progressive updates within a single RUNNING phase.
 
 ---
 
-## Architecture Overview
+## Source of Truth: Workflow Execution Status
+
+The server manages the workflow lifecycle through a state machine. The frontend reads `workflow.status` to determine what to render.
+
+Source: `WorkflowStatus` enum in `flovyn-server/crates/core/src/domain/workflow.rs`
 
 ```
-                    LIVE STREAMING                          HISTORICAL
-                    (ephemeral)                             (durable)
+PENDING ──→ RUNNING ──→ WAITING ──→ RUNNING ──→ ... ──→ COMPLETED
+                │                                         ↑
+                ├──→ CANCELLING ──→ CANCELLED              │
+                └──→ FAILED ──────────────────────────────┘
+```
 
+| `workflow.status` | UI rendering | Input enabled | Cancel visible |
+|-------------------|-------------|---------------|----------------|
+| `PENDING` | Spinner: "Starting..." | No | No |
+| `RUNNING` | Spinner: "Thinking..." or tool execution | No | Yes |
+| `WAITING` | Idle, ready for input | Yes | No |
+| `CANCELLING` | Spinner: "Cancelling..." | No | No |
+| `COMPLETED` | Final message shown, input disabled | No | No |
+| `FAILED` | Error banner with message | No | No |
+| `CANCELLED` | "Cancelled" banner | No | No |
+
+**Key rule**: When `workflow.status` is `WAITING` or terminal (`COMPLETED`/`FAILED`/`CANCELLED`), ALL tool calls in the conversation are complete. No tool call loaded from persisted state should ever show "Running".
+
+---
+
+## Former State Keys — All Write-Only Except `messages`
+
+The agent workflow writes 6 keys via `ctx.set_raw()`. Only `messages` is read by the frontend. The rest are dead writes that can be removed with zero UI changes.
+
+| State key | Written by agent | Read by frontend? | Replacement |
+|-----------|-----------------|-------------------|-------------|
+| `messages` | Yes | **Yes** (page load, SSE fallback) | Keep |
+| `totalUsage` | Yes | No (not displayed yet) | Keep for future use |
+| `status` | Yes | No | `workflow.status` from REST API |
+| `currentToolCall` | Yes | No | SSE events (live), `messages` (reload) |
+| `lastArtifact` | Yes | No | Not consumed anywhere |
+| `currentTurn` | Yes | No | Not consumed anywhere |
+
+## Two Data Layers
+
+### Layer 1: Durable State (survives page reload)
+
+| Data | Source | Persistence | Used for |
+|------|--------|-------------|----------|
+| Workflow status | `workflow.status` from REST API | DB (workflow_execution table) | UI chrome: spinners, input, cancel |
+| Conversation history | `state.messages` via `ctx.set_raw()` | DB (workflow_event table, STATE_SET) | Reconstruct chat on page load |
+| Lifecycle events | WORKFLOW_SUSPENDED, COMPLETED, FAILED | DB (workflow_event table) | Status transitions |
+
+### Layer 2: Ephemeral Events (live streaming only)
+
+| Data | Source | Persistence | Used for |
+|------|--------|-------------|----------|
+| LLM text deltas | `ctx.stream_token()` → SSE `token` | None | Progressive text rendering |
+| Tool call start/end | `ctx.stream_data_value()` → SSE `data` | None | Tool execution UI during streaming |
+| Thinking deltas | `ctx.stream_data_value()` → SSE `data` | None | Extended thinking UI |
+| Terminal output | `ctx.stream_data_value()` → SSE `data` | None | Bash output viewer |
+
+**Design principle**: Ephemeral events drive the UI *within* a RUNNING phase. They are discarded after the phase ends. On page reload, the UI reconstructs entirely from durable state.
+
+---
+
+## Data Flow
+
+```
  ┌──────────────────────────────────────────────────────────────────────────┐
  │  agent-server (worker process)                                          │
  │                                                                         │
  │  AgentWorkflow                     LLM Request Task                     │
  │  ├─ ctx.set_raw("messages", [...]) ├─ ctx.stream_token("Hello")         │
- │  ├─ ctx.set_raw("currentToolCall") ├─ ctx.stream_data_value(tool_call)  │
- │  ├─ ctx.set_raw("status", ...)     └─ ctx.stream_data_value(thinking)   │
- │  └─ ctx.set_raw("currentTurn", n)                                       │
+ │  ├─ ctx.set_raw("totalUsage", ...) ├─ ctx.stream_data_value(tool_call)  │
+ │  └─ ctx.wait_for_signal(...)       └─ ctx.stream_data_value(thinking)   │
  │         │                                │                              │
  │         │ gRPC: SubmitWorkflowCommands   │ gRPC: StreamTaskData         │
  └─────────┼────────────────────────────────┼──────────────────────────────┘
@@ -37,9 +96,8 @@ This document maps how conversation data flows from the agent workflow through t
  │  WorkflowDispatch handler          TaskExecution handler                │
  │  ├─ SetState cmd                   ├─ StreamTaskData RPC                │
  │  │  → WorkflowEvent(STATE_SET)     │  → StreamEvent { type, payload }   │
- │  │  → event_repo.append_batch()    │  → stream_publisher.publish()      │
- │  │  → persisted to DB ✓            │  → ephemeral, NOT persisted ✗      │
- │  │  → NOT published to stream ✗    │                                    │
+ │  │  → persisted to DB ✓            │  → stream_publisher.publish()      │
+ │  │  → NOT published to stream ✗    │  → ephemeral, NOT persisted ✗      │
  │  │                                 │                                    │
  │  ├─ Lifecycle events               │                                    │
  │  │  → WORKFLOW_SUSPENDED           │                                    │
@@ -49,11 +107,11 @@ This document maps how conversation data flows from the agent workflow through t
  │  │                                 │                                    │
  │  └─ get_current_state()            │                                    │
  │     → replays STATE_SET events     │                                    │
- │     → returns final state map      │                                    │
+ │     → returns { messages, totalUsage }                                  │
  │                                    │                                    │
  │            REST API                │      SSE Endpoint                  │
  │  GET .../state → state map         │  GET .../stream/consolidated       │
- │                                    │  ├─ stream_subscriber (tokens,     │
+ │  GET .../      → workflow.status   │  ├─ stream_subscriber (tokens,     │
  │                                    │  │  tool_calls, data)              │
  │                                    │  └─ event_subscriber (lifecycle)   │
  └────────────┬─────────────────────────────────────┬──────────────────────┘
@@ -62,218 +120,118 @@ This document maps how conversation data flows from the agent workflow through t
  ┌──────────────────────────────────────────────────────────────────────────┐
  │  flovyn-app (Next.js frontend)                                          │
  │                                                                         │
- │  Historical Load                   Live Streaming                       │
- │  [runId]/page.tsx                  chat-stream.ts → chat-adapter.ts     │
- │  ├─ GET /state                     ├─ SSE EventSource                   │
- │  ├─ extract state.messages         ├─ parse → ChatStreamEvent           │
- │  ├─ toThreadMessages()             ├─ yield → ChatModelRunResult        │
- │  └─ pass to assistant-ui           └─ render via assistant-ui           │
+ │  Page Load (durable)              Live Streaming (ephemeral)            │
+ │  [runId]/page.tsx                 chat-stream.ts → chat-adapter.ts      │
+ │  ├─ GET workflow → status         ├─ SSE EventSource                    │
+ │  ├─ GET state → messages          ├─ parse → ChatStreamEvent            │
+ │  ├─ toThreadMessages()            ├─ yield → ChatModelRunResult         │
+ │  └─ UI driven by workflow.status  └─ progressive updates within RUNNING │
  └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Layer 1: Agent Workflow (`agent-server`)
+## Task Execution Status (within RUNNING)
 
-### State Keys (Durable — via `ctx.set_raw()`)
+Source: `TaskStatus` enum in `flovyn-server/crates/core/src/domain/task.rs`: `Pending`, `Running`, `Completed`, `Failed`, `Cancelled`
 
-The agent workflow sets workflow state at key points during execution. Each call produces a `SetState` gRPC command that is persisted as a `STATE_SET` workflow event.
+The agent workflow schedules two kinds of tasks:
 
-| State Key | Type | Set When | Purpose |
-|-----------|------|----------|---------|
-| `messages` | `Message[]` | After LLM response, tool result, signal consumption | Full conversation history |
-| `status` | `"running"` \| `"waiting_for_input"` | Start of turn, before signal wait | Workflow lifecycle |
-| `currentTurn` | `number` | Before each LLM call | Turn counter |
-| `currentToolCall` | `{type, toolCall, result?}` | Before/after each tool execution | Tool execution tracking |
-| `lastArtifact` | `{type, path, action}` | After write-file/edit-file tools | File modification tracking |
-| `totalUsage` | `{input, output, ...}` | Before waiting for input | Token usage accumulation |
+**`llm-request` task** — streams tokens, tool_call intents, thinking deltas:
 
-**Key insight**: `messages` contains the **complete** conversation history. It's the single source of truth for historical reconstruction.
+| Task status | SSE events | UI rendering |
+|---|---|---|
+| `PENDING` | `TASK_CREATED` lifecycle | "Thinking..." spinner |
+| `RUNNING` | `token`, `thinking_delta`, `tool_call_start/end` | Progressive text + tool cards |
+| `COMPLETED` | `TASK_COMPLETED` lifecycle | Text complete |
+| `FAILED` | `TASK_FAILED` lifecycle | Error in conversation |
 
-### Streaming Events (Ephemeral — via `ctx.stream_*()`)
+**Tool tasks** (`run-sandbox`, `bash`, `read-file`, etc.) — execute tools, return results:
 
-The `llm-request` task streams real-time events from the LLM provider. These go through a separate path (`StreamTaskData` gRPC) and are **not persisted**.
+| Task status | SSE events | UI rendering |
+|---|---|---|
+| `PENDING`/`RUNNING` | `TASK_CREATED`, `terminal` (bash/sandbox) | Tool card "Running..." |
+| `COMPLETED` | `TASK_COMPLETED` lifecycle | Tool card "Complete" |
+| `FAILED` | `TASK_FAILED` lifecycle | Tool card "Failed" |
 
-| SDK Call | StreamEventType | Payload | Frontend Event |
-|----------|----------------|---------|----------------|
-| `ctx.stream_token(text)` | `Token` | `{"type":"token","text":"..."}` | `{ kind: 'token' }` |
-| `ctx.stream_data_value(json!({"type":"tool_call_start",...}))` | `Data` | `{"type":"tool_call_start","tool_call":{...}}` | `{ kind: 'tool_call_start' }` |
-| `ctx.stream_data_value(json!({"type":"tool_call_end",...}))` | `Data` | `{"type":"tool_call_end","tool_call":{...}}` | `{ kind: 'tool_call_end' }` |
-| `ctx.stream_data_value(json!({"type":"thinking_delta",...}))` | `Data` | `{"type":"thinking_delta","delta":"..."}` | `{ kind: 'thinking_delta' }` |
-
-**Source**: `agent-server/src/tasks/llm_request.rs:119-164`
-
-### Dual Publication of Tool Calls
-
-Tool calls are published through **both** mechanisms:
-
-1. **LLM streaming** (`llm_request.rs`): Real-time `tool_call_start`/`tool_call_end` streamed from the LLM provider during token generation. These reflect the LLM's **intent** to call a tool.
-
-2. **Workflow state** (`agent.rs`): `ctx.set_raw("currentToolCall", ...)` set before/after actual tool execution. These reflect the **execution** of the tool (with result/error).
-
-The frontend currently uses **only the streaming path** for live display. The state path exists for historical reconstruction and debugging.
+**Note**: Task lifecycle events (`TASK_CREATED`, `TASK_COMPLETED`, `TASK_FAILED`) are published through the SSE stream but currently ignored by the frontend adapter. Tool call UI uses the LLM streaming path (`tool_call_start`/`tool_call_end`) instead.
 
 ---
 
-## Layer 2: Server (`flovyn-server`)
+## SSE Stream Events → UI Updates (during RUNNING)
 
-### Two Independent Publish Systems
-
-| System | Interface | Transport | Persistence | Scope |
-|--------|-----------|-----------|-------------|-------|
-| **Stream Publisher** | `StreamEventPublisher` | NATS / In-Memory broadcast | Ephemeral (replay buffer only) | Per workflow execution |
-| **Event Publisher** | `EventPublisher` | NATS / In-Memory broadcast | Ephemeral | Per org + workflow |
-
-### What Gets Published Where
-
-| Event Source | Event Store (DB) | Stream Publisher | Event Publisher |
-|-------------|:---:|:---:|:---:|
-| `SetState` (STATE_SET) | Yes | **No** | No |
-| `StreamTaskData` (tokens, tool_calls) | No | **Yes** | No |
-| `WORKFLOW_SUSPENDED` | Yes | **Yes** | Yes |
-| `WORKFLOW_COMPLETED` | Yes | **Yes** | Yes |
-| `WORKFLOW_FAILED` | Yes | **Yes** | Yes |
-| `TASK_CREATED` | Yes | **Yes** | Yes |
-| `TASK_COMPLETED` | Yes | No | Yes |
-| `TIMER_STARTED` | Yes | **Yes** | No |
-
-**Key insight**: STATE_SET events are persisted to the event store but **never** published to the stream. This means late-subscribing SSE clients cannot see state changes — they must use the REST state API instead.
-
-### SSE Consolidated Endpoint
-
-`GET /api/orgs/{org}/workflow-executions/{id}/stream/consolidated`
-
-Merges two streams into a single SSE connection:
-- **Stream events** from `stream_subscriber.subscribe()` — tokens, data, lifecycle
-- **Lifecycle events** from `event_subscriber.subscribe()` — workflow/task state transitions
-
-Also merges child workflow streams (fetches child IDs from DB and subscribes to all).
-
-**Query parameter**: `?types=token,data,error,workflow.completed,...` filters event types.
-
-### StreamEvent Structure
-
-```rust
-pub struct StreamEvent {
-    pub task_execution_id: String,
-    pub workflow_execution_id: String,  // routing key for SSE subscriptions
-    pub sequence: i32,
-    pub event_type: StreamEventType,    // Token | Progress | Data | Error
-    pub payload: String,                // JSON string
-    pub timestamp_ms: i64,
-}
-```
-
-### State Reconstruction (REST)
-
-`GET /api/orgs/{org}/workflow-executions/{id}/state`
-
-Replays all `STATE_SET` and `STATE_CLEARED` events from `workflow_event` table in sequence order:
-- `STATE_SET` → upsert key in map
-- `STATE_CLEARED` → remove key from map
-- Returns final state: `{ messages: [...], status: "...", currentTurn: N, ... }`
-
-**Source**: `server/src/repository/event_repository.rs:get_current_state()`
+| SSE event | Source | UI transition |
+|-----------|--------|--------------|
+| `token` | LLM streaming | Append text to assistant message |
+| `thinking_delta` | LLM streaming | Append to reasoning block |
+| `tool_call_start` | LLM streaming | Add tool card with "Running" indicator |
+| `tool_call_end` | LLM streaming | Update tool card arguments |
+| `terminal` | Tool task streaming | Forward to terminal viewer |
+| `TASK_CREATED` | Task lifecycle | Currently ignored |
+| `TASK_COMPLETED` | Task lifecycle | Currently ignored |
+| `TASK_FAILED` | Task lifecycle | Currently ignored |
+| `WORKFLOW_SUSPENDED` | Workflow lifecycle | → `turn_complete`: stop spinner, enable input |
+| `WORKFLOW_COMPLETED` | Workflow lifecycle | → `workflow_done`: final state |
+| `WORKFLOW_FAILED` | Workflow lifecycle | → `workflow_done`: error state |
+| `stream_error` | SSE transport | Show error, attempt reconnection |
 
 ---
 
-## Layer 3: Frontend (`flovyn-app`)
+## Tool Call Status Resolution
 
-### ChatStreamEvent Types
+Tool calls must render correctly in three scenarios:
 
-Parsed from SSE events in `chat-stream.ts`:
-
-| Kind | Source SSE Type | Trigger |
-|------|----------------|---------|
-| `token` | `event: token` | LLM text delta |
-| `tool_call_start` | `event: data` | Inner `type: "tool_call_start"` |
-| `tool_call_end` | `event: data` | Inner `type: "tool_call_end"` |
-| `thinking_delta` | `event: data` | Inner `type: "thinking_delta"` |
-| `terminal` | `event: data` | Inner `type: "terminal"` |
-| `lifecycle` | `event: data` | `type: "Event"` (generic) |
-| `turn_complete` | `event: data` | `WORKFLOW_SUSPENDED` + `suspendType === "SUSPEND_TYPE_SIGNAL"` |
-| `workflow_done` | `event: data` | `WORKFLOW_COMPLETED` / `WORKFLOW_FAILED` / `WORKFLOW_CANCELLED` |
-| `stream_error` | `event: error` | SSE error |
-
-### Chat Adapter Consumption
-
-`flovyn-chat-adapter.ts` bridges `ChatStreamEvent` → assistant-ui `ChatModelRunResult`:
-
-| ChatStreamEvent | Adapter Action |
-|-----------------|----------------|
-| `token` | Append to current text part, yield updated content |
-| `tool_call_start` | Create new tool-call part (with deduped ID), yield |
-| `tool_call_end` | Update matching tool-call's arguments, yield |
-| `terminal` | Forward to `onTerminalData` callback (no yield) |
-| `turn_complete` | Yield with `status: { type: 'complete', reason: 'stop' }`, return |
-| `workflow_done` | Yield final status (complete/error/cancelled), return |
-| `stream_error` | Yield error text, return |
-| `thinking_delta` | Ignored |
-| `lifecycle` | Ignored |
-
-### Follow-Up Turn Handling
-
-For follow-up messages (same session, `turnCount > 0`):
-1. Open SSE stream first (subscribe-before-signal)
-2. Send `userMessage` signal via REST
-3. Skip all replayed events until `WORKFLOW_RESUMED` lifecycle event
-4. Process new events normally from that point
-
-### Historical Load
-
-`[runId]/page.tsx`:
-1. `GET /workflow-executions/{id}` — metadata (status, input, timestamps)
-2. `GET /workflow-executions/{id}/state` — final state map
-3. Extract `state.messages` → convert via `toThreadMessages()` → pass as `initialMessages` to assistant-ui runtime
+| Scenario | How tool status is determined |
+|----------|------------------------------|
+| **Live streaming** | `tool_call_start` → Running, `tool_call_end` or `turn_complete` → Complete |
+| **Page reload** | Tool has `result` in messages → Complete. No result + workflow is WAITING/terminal → Complete |
+| **SSE reconnection** | Fallback to state API, same as page reload |
 
 ---
 
-## Observations and Gaps
+## Page Load Reconstruction
 
-### 1. STATE_SET Not Streamed
+On page load or SSE reconnection, the frontend reconstructs entirely from durable state:
 
-STATE_SET events are persisted but not published to the SSE stream. This means:
-- Live clients see tokens/tool_calls from the LLM streaming path
-- But they don't see `messages`, `status`, `currentTurn` changes in real-time
-- If an SSE client disconnects and reconnects, it cannot reconstruct the conversation from stream events alone — it must call the state API
-
-### 2. Dual Tool Call Events are Redundant
-
-Tool calls are emitted twice:
-- **LLM streaming** (`llm_request.rs`): During LLM response generation
-- **Workflow state** (`agent.rs`): During actual tool execution
-
-The streaming path shows tool calls as they appear in the LLM response (real-time, with arguments building up). The state path shows them as discrete start/end with execution results. Only the streaming path is consumed by the frontend for live display.
-
-### 3. Token Streaming is Not Persisted
-
-Tokens from `ctx.stream_token()` are ephemeral — they pass through `StreamTaskData` gRPC → `stream_publisher` → SSE and are never saved. The **final text** is only available via the `messages` state key after the LLM call completes.
-
-This means:
-- If a client joins mid-stream, it misses previous tokens
-- Reconnecting mid-LLM-response loses partial text
-- Historical display reconstructs from `messages` state, not from tokens
-
-### 4. No Stream-to-State Bridge
-
-There is no mechanism to reconstruct a live streaming session from persisted state. The two paths are completely independent:
-- **Stream path**: Real-time, granular (tokens, tool_call deltas), ephemeral
-- **State path**: Checkpoint-based (full `messages` array), durable
-
-A client that loses its SSE connection must either:
-- Reconnect to SSE (may miss events during the gap)
-- Fall back to the state API (loses granularity — no streaming, just final values)
+1. `GET /workflow-executions/{id}` → `workflow.status` determines UI chrome
+2. `GET /workflow-executions/{id}/state` → `state.messages` reconstructs conversation
+3. `toThreadMessages()` converts messages to assistant-ui format
+4. If `workflow.status` is `RUNNING`, open SSE stream for live updates
+5. If `workflow.status` is `WAITING`, show input field, no streaming needed
 
 ---
 
-## Data Flow Summary
+## Server Publish Systems
 
-| What | Persisted? | Streamed Live? | Available for Historical? |
+| System | Persistence | What it carries |
+|--------|-------------|-----------------|
+| **Event Store** (DB) | Durable | STATE_SET, lifecycle events (suspended, completed, failed) |
+| **Stream Publisher** | Ephemeral (in-memory/NATS) | Tokens, tool calls, data, lifecycle events |
+| **Event Publisher** | Ephemeral (in-memory/NATS) | Lifecycle events (for org-level subscribers) |
+
+**Key constraint**: STATE_SET events are persisted but NOT streamed. Late-joining SSE clients must use the REST state API to catch up.
+
+---
+
+## What Is and Is Not Persisted
+
+| Data | Persisted? | Streamed live? | Available on page reload? |
 |------|:---:|:---:|:---:|
-| LLM tokens (text deltas) | No | Yes (SSE `token`) | No (only final text via `messages` state) |
-| Tool call start/end (LLM intent) | No | Yes (SSE `data`) | No |
-| Tool call execution + result | Yes (STATE_SET `currentToolCall`) | No | Yes (via state API) |
-| Full message history | Yes (STATE_SET `messages`) | No | Yes (via state API) |
-| Workflow lifecycle (suspended, done) | Yes (workflow events) | Yes (SSE `data` + lifecycle) | Yes |
+| Workflow execution status | Yes | Yes (lifecycle events) | Yes (REST API) |
+| Conversation messages | Yes (STATE_SET) | No | Yes (state API) |
+| Token usage | Yes (STATE_SET) | No | Yes (state API) |
+| LLM text deltas | No | Yes (SSE `token`) | No (final text in messages) |
+| Tool call start/end (streaming) | No | Yes (SSE `data`) | No (tools in messages) |
 | Thinking deltas | No | Yes (SSE `data`) | No |
 | Terminal output | No | Yes (SSE `data`) | No |
+
+---
+
+## Follow-Up Turn Handling
+
+For follow-up messages in the same session:
+
+1. Open SSE stream first (subscribe-before-signal)
+2. Send `userMessage` signal via REST → workflow resumes (WAITING → PENDING → RUNNING)
+3. Skip replayed events until `WORKFLOW_RESUMED` lifecycle event
+4. Process new events normally from that point
