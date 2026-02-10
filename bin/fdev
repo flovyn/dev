@@ -34,6 +34,7 @@ REPOS = [
     "dev",
     "flovyn-server",
     "flovyn-app",
+    "agent-worker",
     "sdk-rust",
     "sdk-kotlin",
     "sdk-python",

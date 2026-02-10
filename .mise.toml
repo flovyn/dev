@@ -121,3 +121,9 @@ description = "Run standalone-tasks example worker"
 dir = "../sdk-rust"
 run = "cargo run -p standalone-tasks-sample"
 env = { DOTENV_PATH = "../dev/.env" }
+
+[tasks.agent-worker]
+description = "Run agent-worker"
+dir = "../agent-worker"
+run = "cargo run"
+env = { DOTENV_PATH = "../dev/.env" }
