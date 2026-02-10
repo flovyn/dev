@@ -1,129 +1,67 @@
-# Missing `then` Property in WorkflowHandleImpl
+# Missing Then Property
 
 **Date:** 2026-01-28
 **Feature:** missing-then-property
-**Status:** Implemented
+**Status:** Draft
 
 **Issue:** [flovyn/sdk-typescript#2](https://github.com/flovyn/sdk-typescript/issues/2)
 
 ## Context
 
-The TypeScript SDK build is failing in CI with TypeScript errors related to the `WorkflowHandleImpl` class not implementing the `then` method required by the `PromiseLike<O>` interface.
+Failed build
 
-Error output:
-```
-Error: packages/sdk build: src/client.ts(358,5): error TS2322: Type 'WorkflowHandleImpl<O>' is not assignable to type 'O'.
-Error: packages/sdk build: src/client.ts(381,5): error TS2741: Property 'then' is missing in type 'WorkflowHandleImpl<O>' but required in type 'WorkflowHandle<O>'.
-Error: packages/sdk build: src/handles.ts(37,14): error TS2420: Class 'WorkflowHandleImpl<O>' incorrectly implements interface 'WorkflowHandle<O>'.
-```
+> Run pnpm build
+> 
+> > flovyn-sdk-typescript@0.1.0 build /home/runner/work/sdk-typescript/sdk-typescript
+> > pnpm -r build
+> 
+> Scope: 5 of 6 workspace projects
+> packages/native build$ tsc
+> packages/native build: Done
+> packages/sdk build$ tsc
+> Error: packages/sdk build: src/client.ts(358,5): error TS2322: Type 'WorkflowHandleImpl<O>' is not assignable to type 'O'.
+> packages/sdk build:   'O' could be instantiated with an arbitrary type which could be unrelated to 'WorkflowHandleImpl<O>'.
+> Error: packages/sdk build: src/client.ts(381,5): error TS2741: Property 'then' is missing in type 'WorkflowHandleImpl<O>' but required in type 'WorkflowHandle<O>'.
+> Error: packages/sdk build: src/handles.ts(37,14): error TS2420: Class 'WorkflowHandleImpl<O>' incorrectly implements interface 'WorkflowHandle<O>'.
+> packages/sdk build:   Property 'then' is missing in type 'WorkflowHandleImpl<O>' but required in type 'WorkflowHandle<O>'.
+> Error: packages/sdk build: src/testing/test-environment.ts(312,33): error TS2345: Argument of type 'Awaited<O>' is not assignable to parameter of type 'WorkflowHandle<O>'.
+> packages/sdk build:   Type 'O | (O extends object & { then(onfulfilled: infer F, ...args: infer _): any; } ? F extends (value: infer V, ...args: infer _) => any ? Awaited<V> : never : O)' is not assignable to type 'WorkflowHandle<O>'.
+> packages/sdk build:     Type '(null | undefined) & O' is not assignable to type 'WorkflowHandle<O>'.
+> packages/sdk build:       Type 'undefined & O' is not assignable to type 'WorkflowHandle<O>'.
+> packages/sdk build: Failed
+> /home/runner/work/sdk-typescript/sdk-typescript/packages/sdk:
+>  ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @flovyn/sdk@0.1.0 build: `tsc`
+> Exit status 2
+>  ELIFECYCLE  Command failed with exit code 2.
+> Error: Process completed with exit code 2. 
 
 ## Problem Statement
 
-The `WorkflowHandle<O>` interface (defined in `sdk-typescript/packages/sdk/src/types.ts:299`) extends `PromiseLike<O>`:
-
-```typescript
-export interface WorkflowHandle<O> extends PromiseLike<O> {
-  result(): Promise<O>;
-  query<T = any>(queryName: string, args?: any): Promise<T>;
-  signal(signalName: string, payload?: any): Promise<void>;
-  cancel(reason?: string): Promise<void>;
-  readonly workflowId: string;
-}
-```
-
-The `PromiseLike<T>` interface from TypeScript's standard library requires a `then` method:
-
-```typescript
-interface PromiseLike<T> {
-    then<TResult1 = T, TResult2 = never>(
-        onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | undefined | null,
-        onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null
-    ): PromiseLike<TResult1 | TResult2>;
-}
-```
-
-However, `WorkflowHandleImpl` in `sdk-typescript/packages/sdk/src/handles.ts:37` declares it implements `WorkflowHandle<O>` but does not implement the `then` method.
-
-This design decision to make handles "thenable" (Promise-like) enables ergonomic usage:
-
-```typescript
-// Can await directly
-const result = await client.startWorkflow(myWorkflow, input);
-
-// Or use with Promise.all
-const [r1, r2] = await Promise.all([
-  client.startWorkflow(workflow1, input1),
-  client.startWorkflow(workflow2, input2),
-]);
-```
+<!-- What problem does this solve? Why is it needed? -->
 
 ## Solution
 
-Two changes were required:
-
-### 1. Add `then` method to `WorkflowHandleImpl`
-
-Add a `then` method that delegates to `this.result().then(...)`. This pattern is already used consistently elsewhere in the SDK:
-- `TaskHandleImpl` in `workflow-context.ts:78-83`
-- `ChildWorkflowHandleImpl` in `workflow-context.ts:129-133`
-
-```typescript
-then<TResult1 = O, TResult2 = never>(
-  onfulfilled?: ((value: O) => TResult1 | PromiseLike<TResult1>) | null,
-  onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
-): Promise<TResult1 | TResult2> {
-  return this.result().then(onfulfilled, onrejected);
-}
-```
-
-### 2. Change `startWorkflow` return type to avoid TypeScript unwrapping issues
-
-Because `WorkflowHandle<O>` implements `PromiseLike<O>`, TypeScript's `Awaited<T>` type recursively unwraps it. This means `await Promise<WorkflowHandle<O>>` would have type `O` instead of `WorkflowHandle<O>`.
-
-To provide a clean developer experience, `startWorkflow` now returns `Promise<{ handle: WorkflowHandle<O> }>`. The wrapper object is not thenable, so `await` stops there:
-
-```typescript
-// Clean API - no type assertions needed
-const { handle } = await client.startWorkflow(workflow, input);
-console.log(handle.workflowId);
-const result = await handle.result();
-```
-
-Additionally, an `executeWorkflow` convenience method was added for when you just want the result:
-
-```typescript
-const result = await client.executeWorkflow(workflow, input);
-```
+<!-- High-level approach. What are we building? -->
 
 ## Architecture
 
-The change is localized to a single file with no impact on the overall architecture:
+<!-- Diagrams, component interactions, data flow -->
 
 ```
-sdk-typescript/packages/sdk/src/
-├── types.ts              # WorkflowHandle<O> interface (unchanged)
-├── handles.ts            # WorkflowHandleImpl class (ADD then method)
-└── context/
-    └── workflow-context.ts  # TaskHandleImpl, ChildWorkflowHandleImpl (reference)
+<!-- ASCII diagram here -->
 ```
-
-The `WorkflowHandleImpl` is used in two places in `client.ts`:
-1. `startWorkflow()` at line 358 - returns `WorkflowHandleImpl` as `WorkflowHandle`
-2. `getWorkflowHandle()` at line 381 - returns `WorkflowHandleImpl` as `WorkflowHandle`
 
 ## Implementation Notes
 
-- **Single file change**: Only `handles.ts` needs modification
-- **Pattern consistency**: The `then` method implementation follows the exact pattern already used for `TaskHandleImpl` and `ChildWorkflowHandleImpl` within the codebase
-- **Type signature**: Use `Promise<TResult1 | TResult2>` as return type (matches existing implementations)
-- **Error handling**: The `then` method naturally propagates errors through `this.result()` which already throws appropriate errors for workflow failures, cancellations, and timeouts
+<!-- Key technical decisions, constraints, dependencies -->
 
 ## Open Questions
 
-None - the solution is straightforward and follows established patterns in the codebase.
+<!-- Unresolved decisions that need input -->
+
+- [ ] Question 1?
+- [ ] Question 2?
 
 ## References
 
-- TypeScript SDK design doc: `dev/docs/design/20260124_create_sdk_for_typescript.md`
-- Python SDK design doc: `dev/docs/design/20260119_design_sdk_python.md`
-- TypeScript `PromiseLike` interface: [TypeScript lib.es5.d.ts](https://github.com/microsoft/TypeScript/blob/main/lib/lib.es5.d.ts)
+<!-- Related docs, external resources -->

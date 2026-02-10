@@ -1171,11 +1171,7 @@ def cmd_create(args: argparse.Namespace) -> int:
     print(f"  Server gRPC: localhost:{allocation.ports['SERVER_GRPC_PORT']}")
     print(f"  Jaeger:      http://localhost:{allocation.ports['JAEGER_UI_PORT']}")
 
-    if not no_session:
-        print()
-        print("Tmux session created. To attach:")
-        print(f"  fdev attach {feature}")
-    else:
+    if no_session:
         print()
         print("Next steps:")
         print(f"  cd {worktree_path}")
@@ -1217,23 +1213,26 @@ def cmd_delete(args: argparse.Namespace) -> int:
     # Remove worktrees for each repo
     for repo in REPOS:
         repo_path = FLOVYN_ROOT / repo
-        target_path = worktree_path / repo
-
-        if not target_path.exists():
+        if not repo_path.exists():
             continue
 
-        print(f"  Removing {repo}...", end=" ")
-        try:
-            run_git(repo_path, "worktree", "remove", str(target_path), "--force" if args.force else None)
-            print(colored("✓", Colors.GREEN))
-        except subprocess.CalledProcessError:
-            # Try to remove manually if git worktree fails
+        target_path = worktree_path / repo
+
+        if target_path.exists():
+            print(f"  Removing {repo}...", end=" ")
             try:
-                shutil.rmtree(target_path)
-                run_git(repo_path, "worktree", "prune", check=False)
-                print(colored("✓ (manual)", Colors.GREEN))
-            except Exception as e:
-                print(colored(f"✗ {e}", Colors.RED))
+                run_git(repo_path, "worktree", "remove", str(target_path), "--force" if args.force else None)
+                print(colored("✓", Colors.GREEN))
+            except subprocess.CalledProcessError:
+                # Try to remove manually if git worktree fails
+                try:
+                    shutil.rmtree(target_path)
+                    print(colored("✓ (manual)", Colors.GREEN))
+                except Exception as e:
+                    print(colored(f"✗ {e}", Colors.RED))
+
+        # Always prune stale worktree references (handles orphaned refs)
+        run_git(repo_path, "worktree", "prune", check=False)
 
     # Remove worktree directory if empty
     try:
@@ -1249,7 +1248,8 @@ def cmd_delete(args: argparse.Namespace) -> int:
             repo_path = FLOVYN_ROOT / repo
             if not repo_path.exists():
                 continue
-            result = run_git(repo_path, "branch", "-d", feature, capture=True, check=False)
+            # Use -D (force) since worktrees are already removed/pruned
+            result = run_git(repo_path, "branch", "-D", feature, capture=True, check=False)
             if result.returncode == 0:
                 print(f"    {repo}: branch deleted")
 
@@ -1258,6 +1258,35 @@ def cmd_delete(args: argparse.Namespace) -> int:
         print(f"  Killing tmux session...", end=" ")
         tmux_kill_session(feature)
         print(colored("✓", Colors.GREEN))
+
+    # Clear Branch field in GitHub Project
+    try:
+        item = gh_find_item_by_branch(feature)
+        if item:
+            fields = gh_get_field_ids()
+            if "Branch" in fields:
+                print(f"  Clearing GitHub Project Branch field...", end=" ")
+                # Use clearProjectV2ItemFieldValue mutation
+                project_id = gh_get_project_id()
+                mutation = """
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!) {
+                  clearProjectV2ItemFieldValue(input: {
+                    projectId: $projectId
+                    itemId: $itemId
+                    fieldId: $fieldId
+                  }) {
+                    projectV2Item { id }
+                  }
+                }
+                """
+                gh_api(mutation, {
+                    "projectId": project_id,
+                    "itemId": item["id"],
+                    "fieldId": fields["Branch"]["id"]
+                })
+                print(colored("✓", Colors.GREEN))
+    except Exception as e:
+        print(colored(f"  Warning: Could not clear GitHub Project Branch field: {e}", Colors.YELLOW))
 
     print()
     print(colored(f"Worktree '{feature}' deleted.", Colors.GREEN))
@@ -1678,7 +1707,7 @@ def cmd_docs_archive(args: argparse.Namespace) -> int:
 def cmd_attach(args: argparse.Namespace) -> int:
     """Attach to a feature's tmux session."""
     feature = get_feature(args)
-    resume = not args.no_resume
+    resume = args.resume
 
     # Check if session exists
     if not tmux_session_exists(feature):
@@ -1905,6 +1934,12 @@ def cmd_pick(args: argparse.Namespace) -> int:
             except RuntimeError as e:
                 print(colored(f"Warning: Could not update Status: {e}", Colors.YELLOW))
 
+    # Auto-attach to tmux session
+    if tmux_session_exists(branch):
+        print()
+        print(colored(f"Attaching to session '{branch}'...", Colors.BLUE))
+        os.execvp("tmux", ["tmux", "attach-session", "-t", branch])
+
     return 0
 
 
@@ -1979,6 +2014,14 @@ def cmd_move(args: argparse.Namespace) -> int:
     # Start Claude and send status prompt for Design/Planning/Implementation
     statuses_with_prompts = ("Design", "Planning", "Implementing")
     if args.send_prompt and new_status in statuses_with_prompts:
+        # Create tmux session if it doesn't exist but worktree does
+        if not tmux_session_exists(feature) and worktree_exists(feature):
+            print()
+            print(colored("Creating tmux session...", Colors.YELLOW), end=" ")
+            worktree_path = WORKTREES_DIR / feature
+            tmux_create_session(feature, worktree_path)
+            print(colored("✓", Colors.GREEN))
+
         if tmux_session_exists(feature):
             print()
             if new_status == "Design":
@@ -2001,12 +2044,14 @@ def cmd_move(args: argparse.Namespace) -> int:
             tmux_send_keys(feature, f"claude {escaped_prompt}")
             print(colored("✓", Colors.GREEN))
 
+            # Auto-attach to tmux session
             print()
-            print(f"Attach with: fdev attach {feature} --no-resume")
+            print(colored(f"Attaching to session '{feature}'...", Colors.BLUE))
+            os.execvp("tmux", ["tmux", "attach-session", "-t", feature])
         else:
             print()
-            print(colored("No tmux session found.", Colors.YELLOW))
-            print(f"Create one with: fdev attach {feature}")
+            print(colored("No worktree found.", Colors.YELLOW))
+            print(f"Create one with: fdev create {feature}")
 
     # Create PRs when moving to Review
     if new_status == "Review":
@@ -2207,17 +2252,19 @@ def cmd_research(args: argparse.Namespace) -> int:
     print(f"Research doc: {research_path.relative_to(DOCS_DIR) if research_path else 'N/A'}")
     print()
 
-    if not no_session:
-        print("Tmux session created. To attach:")
-        print(f"  fdev attach {topic}")
-    else:
+    if no_session:
         print("Next steps:")
         print(f"  cd {worktree_path}")
+        print()
+        print("When research leads to implementation:")
+        print(f"  fdev docs mv {topic} research design  # Convert to design doc")
+        print(f"  fdev pick {topic}                     # Create full worktree")
+        return 0
 
-    print()
-    print("When research leads to implementation:")
-    print(f"  fdev docs mv {topic} research design  # Convert to design doc")
-    print(f"  fdev pick {topic}                     # Create full worktree")
+    # Auto-attach to tmux session
+    if tmux_session_exists(topic):
+        print(colored(f"Attaching to session '{topic}'...", Colors.BLUE))
+        os.execvp("tmux", ["tmux", "attach-session", "-t", topic])
 
     return 0
 
@@ -2921,7 +2968,7 @@ Examples:
     # attach
     p_attach = subparsers.add_parser("attach", help="Attach to a feature's tmux session")
     p_attach.add_argument("feature", nargs="?", help="Feature name (auto-detected if in worktree)")
-    p_attach.add_argument("--no-resume", action="store_true", help="Don't send resume prompt before attaching")
+    p_attach.add_argument("--resume", action="store_true", help="Send resume prompt to Claude before attaching")
     p_attach.set_defaults(func=cmd_attach)
 
     # sessions
