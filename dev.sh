@@ -24,9 +24,16 @@ APP_DIR="$FLOVYN_ROOT/flovyn-app"
 
 cd "$SCRIPT_DIR"
 
-# Load .env if exists
+# Load .env if exists (only set vars that aren't already defined)
 if [ -f ".env" ]; then
-    export $(grep -v '^#' .env | xargs)
+    while IFS='=' read -r key value; do
+        # Skip comments and empty lines
+        [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+        # Only set if not already defined
+        if [ -z "${!key}" ]; then
+            export "$key=$value"
+        fi
+    done < <(grep -v '^#' .env | grep '=')
 fi
 
 # Colors
@@ -180,7 +187,8 @@ start_app() {
     echo -e "  Port:     $app_port"
     echo ""
 
-    pnpm --filter web dev
+    # Use --hostname 0.0.0.0 to accept connections from external hosts (Tailscale, etc.)
+    pnpm --filter web exec next dev --turbopack --hostname 0.0.0.0
 }
 
 migrate_all() {

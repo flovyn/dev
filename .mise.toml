@@ -125,5 +125,38 @@ env = { DOTENV_PATH = "../dev/.env" }
 [tasks.agent-worker]
 description = "Run agent-worker"
 dir = "../agent-worker"
-run = "cargo run"
-env = { DOTENV_PATH = "../dev/.env" }
+run = "DOTENV_PATH=../dev/.env cargo run"
+
+# Remote access via Tailscale
+[tasks."app:remote"]
+description = "Start flovyn-app accessible via Tailscale (uses TS_HOSTNAME env var)"
+run = """
+if [ -z "$TS_HOSTNAME" ]; then
+  # Try to auto-detect Tailscale hostname (remove trailing dot from FQDN)
+  TS_HOSTNAME=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName | rtrimstr(".")' || echo "")
+fi
+if [ -z "$TS_HOSTNAME" ]; then
+  echo "Error: TS_HOSTNAME not set and could not auto-detect."
+  echo "Set it manually: TS_HOSTNAME=your-host.ts.net mise run app:remote"
+  exit 1
+fi
+echo "Using Tailscale hostname: $TS_HOSTNAME"
+# BETTER_AUTH_TRUST_HOST allows auth from any origin (needed for Tailscale/remote access)
+APP_URL="https://$TS_HOSTNAME" BETTER_AUTH_TRUST_HOST=true ./dev.sh app
+"""
+
+[tasks."server:remote"]
+description = "Start flovyn-server with Tailscale OIDC URLs (uses TS_HOSTNAME env var)"
+run = """
+if [ -z "$TS_HOSTNAME" ]; then
+  # Try to auto-detect Tailscale hostname (remove trailing dot from FQDN)
+  TS_HOSTNAME=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName | rtrimstr(".")' || echo "")
+fi
+if [ -z "$TS_HOSTNAME" ]; then
+  echo "Error: TS_HOSTNAME not set and could not auto-detect."
+  echo "Set it manually: TS_HOSTNAME=your-host.ts.net mise run server:remote"
+  exit 1
+fi
+echo "Using Tailscale hostname: $TS_HOSTNAME"
+APP_URL="https://$TS_HOSTNAME" ./dev.sh server {{arg(name='scenario', default='self-hosted')}}
+"""
