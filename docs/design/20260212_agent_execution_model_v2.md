@@ -203,41 +203,60 @@ An agent execution is a series of **segments**, each bounded by suspension point
 
 ```
 Segment 0 (initial)
-├── append_entry(user, "Hello")           seq=0
-├── schedule_task("llm-call", input)      seq=1 → task_id = {agent}-0-1
+├── append_entry(user, "Hello")
+├── schedule_task("llm-call", input)      task_id = UUID (server-assigned)
 ├── [SUSPEND: wait for task]
 │
 Segment 1 (after task completes)
-├── append_entry(assistant, response)     seq=2
-├── checkpoint(state)                     seq=3
-├── wait_for_signal("user-input")         seq=4
+├── append_entry(assistant, response)
+├── checkpoint(state)
+├── wait_for_signal("user-input")
 ├── [SUSPEND: wait for signal]
 │
 Segment 2 (after signal received)
-├── append_entry(user, signal_content)    seq=5
+├── append_entry(user, signal_content)
 ├── ...
 ```
 
 Within each segment:
-- Operations have **deterministic sequence numbers**
-- IDs are derived from `{agent_id}-{segment}-{sequence}`
 - Commands are **batched** in memory
 - At suspension, batch is **committed atomically**
+- **Entry IDs are random UUIDs** (not counter-based) - works in local and remote mode
+- **Task IDs are random UUIDs** (not counter-based) - works in local and remote mode
+- **`leaf_entry_id`** in checkpoint tracks conversation position
 
 ### Recovery Model
 
 On crash and recovery:
 
-1. Load last committed segment state
-2. Re-execute from that point
-3. Operations generate same sequence numbers
-4. For each operation:
-   - If result exists in history → return cached result
-   - If not → execute and persist
+1. Load last checkpoint (includes `leaf_entry_id` and agent state)
+2. Load entries from server (using checkpoint's position)
+3. **Continue from checkpoint** - NO replay
+4. Agent code continues execution from where it left off
 
-This is **segment-level replay**, not full replay like workflows. The agent code within a segment must be deterministic, but:
-- External calls (tasks) are non-deterministic - their results are persisted
-- LLM responses, API calls, etc. are captured as task results
+**Key insight: Agents do NOT replay.** Unlike workflows which replay from the beginning:
+- Agents have non-deterministic code paths (signals, conditional logic)
+- Agent code interacts with LLMs, external APIs, user signals
+- Replay would produce different results
+
+The atomic batch commit provides crash safety:
+- **Crash before commit**: No entries/tasks persisted, resume from last checkpoint
+- **Crash after commit**: Entries/tasks persisted with checkpoint, continue from there
+
+### Why NOT Counter-Based IDs
+
+Counter-based IDs (like `{agent_id}:entry:{counter}`) fail when:
+1. **Conditional code paths**: Signal handling, branching logic
+2. **Compaction**: Old entries removed, indices change
+3. **Branching**: Same index refers to different branches
+
+Random UUIDs (`Uuid::new_v4()`) + `leaf_entry_id` pointer work in all cases:
+- Each entry has a unique ID regardless of position
+- `parent_id` chain maintains conversation structure
+- `leaf_entry_id` tracks current position for resume
+- Compaction removes entries but doesn't break references
+- Branching creates new entries with different parent chains
+- **Works offline**: UUID generation is local, no server needed
 
 ### API Changes
 
@@ -257,7 +276,7 @@ let results = join_all(vec![f1, f2]).await?;   // Suspends here, batch committed
 
 The `schedule_task` method:
 - Returns `AgentTaskFuture` immediately (no RPC)
-- Assigns deterministic task ID based on sequence
+- Server assigns task ID when batch is committed
 - Adds "ScheduleTask" command to batch
 - When awaited, suspends agent and commits batch
 
@@ -531,35 +550,38 @@ The coding agent:
 
 ### Determinism Requirements
 
-For segment-level replay to work, agent code must be deterministic within a segment:
+**Unlike workflows, agents do NOT require deterministic code.** Agents use checkpoint-based recovery, not replay.
 
-**Allowed:**
+**Agents can freely use:**
 ```rust
-// Deterministic - same sequence number, same task ID
-let f1 = ctx.schedule_task("task-a", input);
-let result = f1.await?;
+// These are ALL fine in agents - no replay means no determinism requirement
+let id = Uuid::new_v4();                    // Random IDs OK
+let now = SystemTime::now();                // System time OK
+let random = rand::random::<u64>();         // Random values OK
 
-// Deterministic - uses ctx.random() which is seeded
-let id = ctx.random_uuid();
+// Conditional logic based on runtime state is fine
+if ctx.has_signal("user-input").await? {
+    ctx.append_entry(EntryRole::User, &signal).await?;  // Only runs when signal exists
+}
 
-// Deterministic - uses ctx.current_time() which is segment-start time
-let now = ctx.current_time();
-```
-
-**Not Allowed:**
-```rust
-// Non-deterministic - different on replay!
-let id = Uuid::new_v4();
-let now = SystemTime::now();
-let random = rand::random::<u64>();
-
-// Conditional scheduling based on non-deterministic value
-if SystemTime::now().elapsed() > Duration::from_secs(10) {
-    ctx.schedule_task("timeout-task", input);  // May not exist on replay!
+// Scheduling tasks conditionally is fine
+if should_retry {
+    ctx.schedule_task("retry-task", input);
 }
 ```
 
-This is the same requirement as workflows. External non-determinism (LLM responses, API calls) is captured via task results.
+**Why this works:**
+- Agent checkpoints capture ALL state needed to resume
+- On resume, agent loads checkpoint and continues - no replay
+- Entries/tasks committed atomically with checkpoint
+- Server assigns IDs (not SDK counter-based IDs)
+
+**Contrast with workflows:**
+- Workflows replay from beginning on every resume
+- Workflow code MUST be deterministic (same inputs → same operations)
+- Workflows use counter-based IDs for idempotency
+
+This is why agents exist as a separate concept from workflows - they handle non-deterministic interactions (LLMs, users, external APIs) naturally.
 
 ## Migration Path
 
@@ -613,7 +635,7 @@ Agents replay from the beginning on recovery, not from checkpoints.
 - Replay from beginning is expensive
 - Loses checkpoint flexibility
 
-**Decision:** Keep checkpoint-based recovery, but make segments deterministic.
+**Decision:** Keep checkpoint-based recovery. Agents do NOT require determinism.
 
 ### Alternative 2: Keep Current Model, Just Add Local Storage
 
@@ -1196,7 +1218,7 @@ Implementations: `PiAgentProtocol`, `ClaudeCodeProtocol`, `McpAgentProtocol`
 5. **Simpler Mental Model**:
    - No immediate RPCs during scheduling
    - Commands batched, committed atomically
-   - Determinism within segments enables replay for debugging
+   - Checkpoint captures full state for resume (no replay needed)
 
 ## References
 
